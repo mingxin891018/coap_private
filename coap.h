@@ -153,17 +153,55 @@ typedef struct
 } coap_endpoint_t;
 
 
-///////////////////////
+//function 打印coap_packet_t 对象
 void coap_dumpPacket(coap_packet_t *pkt);
-int coap_parse(coap_packet_t *pkt, const uint8_t *buf, size_t buflen);
-int coap_buffer_to_string(char *strbuf, size_t strbuflen, const coap_buffer_t *buf);
-const coap_option_t *coap_findOptions(const coap_packet_t *pkt, uint8_t num, uint8_t *count);
-int coap_build(uint8_t *buf, size_t *buflen, const coap_packet_t *pkt);
+
+//function 打印buf中的二进制数据
+//param bare 是否换行
 void coap_dump(const uint8_t *buf, size_t buflen, bool bare);
+
+//function 将buf中的coap协议包解析成coap_packet_t结构体数据
+int coap_parse(coap_packet_t *pkt, const uint8_t *buf, size_t buflen);
+
+//function 将coap_buffer_t结构体中的数据copy到strbuf中
+int coap_buffer_to_string(char *strbuf, size_t strbuflen, const coap_buffer_t *buf);
+
+//function 在coap_packet_t结构体中找到T为num的option数据并返回
+const coap_option_t *coap_findOptions(const coap_packet_t *pkt, uint8_t num, uint8_t *count);
+
+//function 将coap_packet_t对象封装成CoAP协议包,并存储到buf中
+int coap_build(uint8_t *buf, size_t *buflen, const coap_packet_t *pkt);
+
+//function	将参数所提供的数据封装成一个coap_packet_t对象
+//param scratch 		将opt12数据写入其中
+//param pkt 			输出的封装好的coap_packet_t对象
+//param content 		payload数据
+//param content_len 	payload数据的长度
+//param msgid_hi		Message ID的高字节
+//param msgid_lo		Message ID的低字节
+//param tok				tok值对象
+//param rspcode			响应码
+//param content_type 	opt12的值,响应报文的编码格式
+//return 返回0说明解析参数正确,并生成coap_packet_t对象,返回COAP_ERR_BUFFER_TOO_SMALL说明scratch空间太小,scratch空间最小2byte
 int coap_make_response(coap_rw_buffer_t *scratch, coap_packet_t *pkt, const uint8_t *content, size_t content_len, uint8_t msgid_hi, uint8_t msgid_lo, const coap_buffer_t* tok, coap_responsecode_t rspcode, coap_content_type_t content_type);
+
+//function 处理收到的CoAP包,并根据设置的资源对此包进行回复
+//param scratch 	恢复消息的编码格式
+//param inpkt		收到的CoAP包
+//param outpkt		根据inpkt制作好的response包存放在outpkt空间中,outpkt在此函数中被发送
 int coap_handle_req(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt);
+
+//function 计算option结构中T和L的扩展方式
+//当值为13：有一个8-bit无符号整型（extended）跟随在第一个字节之后，本option的实际delta是这个8-bit值加13。
+//当值为14：有一个16-bit无符号整型（网络字节序）（extended）跟随在第一个字节之后，本option的实际delta是这个16-bit值加269。
+//当值为15：为payload标识符而保留。如果这个字段被设置为值15，但这个字节不是payload标识符，那么必须当作消息格式错误来处理。
+//传入T和L的实际值,将扩展方式回填到参数nibble中
 void coap_option_nibble(uint32_t value, uint8_t *nibble);
+
+//function 设置coap
 void coap_setup(void);
+
+//function 设置全局变量数组 endpoints
 void endpoint_setup(void);
 
 #ifdef __cplusplus
