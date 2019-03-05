@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include "coap.h"
 
+#define DEBUG
 extern void endpoint_setup(void);
 extern const coap_endpoint_t endpoints[];
 
@@ -387,6 +388,39 @@ int coap_make_response(coap_rw_buffer_t *scratch, coap_packet_t *pkt, const uint
     pkt->opts[0].buf.len = 2;
     pkt->payload.p = content;
     pkt->payload.len = content_len;
+    return 0;
+}
+
+int coap_make_request(coap_packet_t *pkt, coap_buffer_t *path, const coap_buffer_t* tok, coap_method_t method, coap_msgtype_t type)
+{
+	uint8_t msgid_hi = 0 ,msgid_lo = 0;
+	coap_content_type_t content_type = 0;
+	
+	//head
+	pkt->hdr.ver = 0x01;
+	pkt->hdr.t = type;
+	pkt->hdr.tkl = 0;
+	pkt->hdr.code = MAKE_RSPCODE(0, method);
+	pkt->hdr.id[0] = msgid_hi;
+	pkt->hdr.id[1] = msgid_lo;
+	pkt->numopts = 1;
+
+	//token
+	if (tok) {
+		pkt->hdr.tkl = tok->len;
+		pkt->tok = *tok;
+	}  
+    
+	//opt
+	if (path->len < 1)
+        return COAP_ERR_BUFFER_TOO_SMALL;
+	//T
+	pkt->opts[0].num = COAP_OPTION_URI_PATH;
+    //V
+	pkt->opts[0].buf.p = path->p;
+    //L
+	pkt->opts[0].buf.len = path->len;
+
     return 0;
 }
 

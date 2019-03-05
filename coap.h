@@ -1,5 +1,5 @@
-#ifndef COAP_H
-#define COAP_H 1
+#ifndef __COAP_H__
+#define __COAP_H__
 
 #ifdef __cplusplus
 extern "C" {
