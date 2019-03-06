@@ -206,9 +206,10 @@ void coap_dumpPacket(coap_packet_t *pkt)
 {
     coap_dumpHeader(&pkt->hdr);
     coap_dumpOptions(pkt->opts, pkt->numopts);
-    printf("Payload: ");
-    coap_dump(pkt->payload.p, pkt->payload.len, true);
-    printf("\n");
+//    printf("Payload: ");
+//    coap_dump(pkt->payload.p, pkt->payload.len, true);
+//    printf("\n");
+    printf("Payload Len=%d,msg=%s\n", pkt->payload.len, pkt->payload.p);
 }
 #endif
 

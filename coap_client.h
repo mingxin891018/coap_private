@@ -88,7 +88,16 @@ typedef struct
 
 }coap_client_t;
 
+//初始化CoAP协议客户端，num为同时支持访问的个数
 bool sw_coap_client_init(unsigned int num);
+
+//CoAP协议访问一个URL
+//param url  CoAP资源定位符,格式coap://10.10.18.253:port/time
+//param type 访问方式 COAP_METHOD_GET COAP_METHOD_POST COAP_METHOD_PUT COAP_METHOD_DELETE
+//param  req_data 收到request的存储位置
+//param  req_len 存储位置长度
+//param  code 返回码2.05  == 200 OK
+//return 是否访问成功
 bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, char *req_data, size_t *req_len, uint8_t *code);
 
 #endif //__COAP_CLIENT_H__
