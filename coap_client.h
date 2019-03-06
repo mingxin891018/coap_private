@@ -27,7 +27,7 @@
 //CoAP协议绑定的UDP端口
 #define COAP_DEFAULT_COAP_PORT 5683
 //ACK消息超时时间
-#define COAP_ACK_TIMEOUT 2000
+#define COAP_ACK_TIMEOUT 60000
 //ACK超时随机指数
 #define COAP_ACK_RANDOM_FACTOR	1.5
 //消息重传间隔指数
@@ -68,8 +68,6 @@ typedef struct espconn_udp_ {
 
 typedef struct
 {
-	espconn_udp_t sock;
-	
 	const char *path;
 	time_t send_time;
 	time_t recv_time;
