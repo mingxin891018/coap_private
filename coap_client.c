@@ -18,13 +18,11 @@ static unsigned int m_rand = 0;
 void udp_recv_cb(void *arg, char *pdata, unsigned short len) 
 {
 	int i = 0;
-	char id_str1[4] = {0};
-	char id_str2[4] = {0};
 	coap_client_t *p;
 	coap_packet_t pkt = {0};
 	struct espconn *udp = arg;
 	remot_info *premot = NULL;
-	
+
 	if(espconn_get_connection_info(udp,&premot,0) == ESPCONN_OK)
 	{    
 		udp->proto.udp->remote_port = premot->remote_port;
@@ -38,34 +36,28 @@ void udp_recv_cb(void *arg, char *pdata, unsigned short len)
 				udp->proto.udp->remote_ip[1], udp->proto.udp->remote_ip[2],
 				udp->proto.udp->remote_ip[3], udp->proto.udp->remote_port);
 	}
-	
+
 	if(0 != coap_parse(&pkt, (const uint8_t *)pdata, len)){
 		ERROR("parse coap package error!\n");
 		return ;
 	}
 	coap_dumpPacket(&pkt);
-	
-	memset(id_str1, 0 , 4);
-	memset(id_str2, 0 , 4);
+
 	xSemaphoreTake(m_mutex, portMAX_DELAY);
-	INFO("=====MINGXIN========TAKE\n");
 	for(i = 0; i < m_client_max_num; i++){
 		p = m_client_handle[i];
-		sprintf(id_str1, "%02x%02x", p->msgid[0], p->msgid[1]);
-		sprintf(id_str2, "%02x%02x", pkt.hdr.id[0], pkt.hdr.id[1]);
-		if((p != NULL) && (strncmp(id_str1, id_str2, 4) == 0) && (p->result == REQ_WAITTING))
-			INFO("find client handle[%d] success,MSDID=%s,pkt.hdr.id=%s,result=%d.\n", i, id_str1, id_str2, p->result);
+		if((p != NULL) && (p->msgid[0] == pkt.hdr.id[0]) && (p->msgid[1] == pkt.hdr.id[1]) && (p->result == REQ_WAITTING)){
+			INFO("find client handle[%d] success,MSDID=%02x%02x,pkt.hdr.id=%02x%02x,result=%d.\n", i, p->msgid[0], p->msgid[1], pkt.hdr.id[0], pkt.hdr.id[1],p->result);
 			p->recv_time = time(NULL);
 			memcpy(p->resp_data, pdata, len);
 			p->result = REQ_SUCCESS;
 			xSemaphoreGive(m_mutex);
-			INFO("=====MINGXIN========GIVE\n");
 			xSemaphoreGive(p->recv_resp_sem);
 			return;
+		}
+		xSemaphoreGive(m_mutex);
+		ERROR("find client handle error\n");
 	}
-	xSemaphoreGive(m_mutex);
-	INFO("=====MINGXIN========GIVE\n");
-	ERROR("find client handle error\n");
 }
 
 void udp_send_cb(void* arg)
@@ -77,7 +69,7 @@ void udp_send_cb(void* arg)
 	INFO("UDP_SEND_CB ip:%d.%d.%d.%d port:%d\n", udp->proto.udp->remote_ip[0],
 			udp->proto.udp->remote_ip[1], udp->proto.udp->remote_ip[2],
 			udp->proto.udp->remote_ip[3], udp->proto.udp->remote_port\
-			);
+		);
 }
 
 static bool esp_create_udp(struct espconn *p, esp_udp* udp)
@@ -86,7 +78,7 @@ static bool esp_create_udp(struct espconn *p, esp_udp* udp)
 
 	p->type = ESPCONN_UDP;
 	p->proto.udp = udp;
-	
+
 	espconn_regist_recvcb(p, &udp_recv_cb);
 	espconn_regist_sentcb(p, &udp_send_cb);
 
@@ -152,7 +144,7 @@ relloc:
 	p = (coap_client_t *)malloc(sizeof(coap_client_t));
 	if(p == NULL){
 		ERROR("malloc client error!\n");
-		vTaskDelay(500 / portTICK_RATE_MS);
+		vTaskDelay(1000 / portTICK_RATE_MS);
 		goto relloc;
 	}
 	memset(p, 0, sizeof(coap_client_t));
@@ -191,7 +183,6 @@ relloc:
 	p->result = REQ_INIT;
 	
 	xSemaphoreTake(m_mutex, portMAX_DELAY);
-	INFO("=====MINGXIN========TAKE\n");
 	for(i = 0; i < m_client_max_num; i++){
 		if(m_client_handle[i] == NULL){
 			INFO("client handle enough,i=%d.\n", i);
@@ -201,12 +192,10 @@ relloc:
 	if(m_client_handle[i] != NULL){
 		ERROR("client num already max,init client create failed!\n");
 		xSemaphoreGive(m_mutex);
-	INFO("=====MINGXIN========GIVE\n");
 		goto CRT_ERROR;
 	}
 	m_client_handle[i] = p;
 	xSemaphoreGive(m_mutex);
-	INFO("=====MINGXIN========GIVE\n");
 	INFO("create coap client handle[%d] MSGID=%2x%2x.\n", i, p->msgid[0], p->msgid[1]);
 
 	return i;
@@ -226,26 +215,18 @@ static int coap_send_wait_request(int client_index)
 
 send_again:
 	//UDP发送数据,初始化发送时间
-	xSemaphoreTake(m_mutex, portMAX_DELAY);
-	INFO("=====MINGXIN========TAKE\n");
 	if(0 != espconn_sendto(&m_esp_sock, p->msg_data, p->msg_len)){
 		p->send_count++;
 		if(p->send_count < COAP_MAX_RETRANSMIT){
-			xSemaphoreGive(m_mutex);
-	INFO("=====MINGXIN========GIVE\n");
 			vTaskDelay(1000 / portTICK_RATE_MS);
 			goto send_again;
 		}
 
 		p->result = REQ_FAILED;
-		xSemaphoreGive(m_mutex);
-	INFO("=====MINGXIN========GIVE\n");
 		ERROR("send client handle[%d] failed,send len=%dret = %d", client_index, p->msg_len, ret);
 		return -1;
 	}
 	p->result = REQ_WAITTING;
-	xSemaphoreGive(m_mutex);
-	INFO("=====MINGXIN========GIVE\n");
 	
 	p->send_time = time(NULL);
 	INFO("send time=%d\n", p->send_time);
@@ -262,22 +243,18 @@ static int coap_analysis_response(int client_index, char *buf, int *buf_len, uin
 	*code = 0xff;
 	memset(&pkt, 0, sizeof(pkt));
 	
-	xSemaphoreTake(m_mutex, portMAX_DELAY);
 	if(m_client_handle[client_index]->result != REQ_SUCCESS){
-		xSemaphoreGive(m_mutex);
 		INFO("client handle[%d], bad request!, result = %d\n", client_index, p->result);
 		return -1;
 	}
 
 	if(0 != (ret = coap_parse(&pkt, p->resp_data, p->resp_len))){
-		xSemaphoreGive(m_mutex);
 		ERROR("carse coap msg failed!.ret = %d\n",ret);
 		return -1;
 	}
 
 	*code = pkt.hdr.code;
 	if(*buf_len < pkt.payload.len){
-		xSemaphoreGive(m_mutex);
 		INFO("buffer too small,can not copy payload.\n");
 		return -1;
 	}
@@ -286,7 +263,6 @@ static int coap_analysis_response(int client_index, char *buf, int *buf_len, uin
 		memcpy(buf, pkt.payload.p, pkt.payload.len);
 		*buf_len = pkt.payload.len;
 	}
-	xSemaphoreGive(m_mutex);
 
 	return 0;
 }
@@ -297,19 +273,16 @@ static bool coap_client_delete(int client_index)
 
 wait:
 	xSemaphoreTake(m_mutex, portMAX_DELAY);
-	INFO("=====MINGXIN========TAKE\n");
 	p = m_client_handle[client_index];
 
 	if((p->result != REQ_TIMEOUT) && (p->result != REQ_FAILED) && (p->result != REQ_SUCCESS)){
 		xSemaphoreGive(m_mutex);
-		INFO("=====MINGXIN========GIVE\n");
 		vTaskDelay(1000 / portTICK_RATE_MS);
 		goto wait;
 	}
 	
 	m_client_handle[client_index] = NULL;
 	xSemaphoreGive(m_mutex);
-	INFO("=====MINGXIN========GIVE\n");
 	
 	vSemaphoreDelete(p->recv_resp_sem);
 	free(p);
@@ -356,7 +329,6 @@ void ICACHE_FLASH_ATTR wait2timeout(void *pvParameters)
 		now = time(NULL);
 		
 		xSemaphoreTake(m_mutex, portMAX_DELAY);
-		INFO("=====MINGXIN========TAKE\n");
 		for(i = 0; i < m_client_max_num; i++){
 			p = m_client_handle[i];
 			if((p != NULL) && (p->result == REQ_WAITTING)){
@@ -369,7 +341,6 @@ void ICACHE_FLASH_ATTR wait2timeout(void *pvParameters)
 			}
 		}
 		xSemaphoreGive(m_mutex);
-		INFO("=====MINGXIN========GIVE\n");
 		vTaskDelay(1000 / portTICK_RATE_MS);
 	}
 	vTaskDelete(NULL);
@@ -393,18 +364,16 @@ bool sw_coap_client_init(unsigned int num)
 		goto INIT_ERR;
 	}
 	
-	m_mutex = xSemaphoreCreateCounting(1,1);
-	//m_mutex = xSemaphoreCreateMutex();
+	//m_mutex = xSemaphoreCreateCounting(1,1);
+	m_mutex = xSemaphoreCreateMutex();
 	if(m_mutex == NULL){
 		ERROR("create client handle mutex failed!\n");
 		goto INIT_ERR;
 	}
 
 	xSemaphoreTake(m_mutex, portMAX_DELAY);
-	INFO("=====MINGXIN========TAKE\n");
 	m_client_handle = p;
 	xSemaphoreGive(m_mutex);
-	INFO("=====MINGXIN========GIVE\n");
 	m_client_max_num = num;
 
 	ret = xTaskCreate(wait2timeout, "wait2timeout_proc", 256, NULL, tskIDLE_PRIORITY, NULL);
@@ -471,7 +440,7 @@ bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t t
 	INFO("time is sync,time=%d\n", time(NULL));
 	
 	m_rand = rand();
-	m_rand += 0x101;
+	m_rand += 1;
 	index = coap_client_create(ip, port, path, method, type, NULL, 0);
 	if(index < 0)
 		goto GET_ERROR;
