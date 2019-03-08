@@ -131,7 +131,7 @@ typedef enum
 ///////////////////////
 
 typedef int (*coap_endpoint_func)(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
-#define MAX_SEGMENTS 2  // 2 = /foo/bar, 3 = /foo/bar/baz
+#define MAX_SEGMENTS 3  // 2 = /foo/bar, 3 = /foo/bar/baz
 typedef struct
 {
     int count;
@@ -186,7 +186,7 @@ int coap_build(uint8_t *buf, size_t *buflen, const coap_packet_t *pkt);
 int coap_make_response(coap_rw_buffer_t *scratch, coap_packet_t *pkt, const uint8_t *content, size_t content_len, uint8_t msgid_hi, uint8_t msgid_lo, const coap_buffer_t* tok, coap_responsecode_t rspcode, coap_content_type_t content_type);
 
 //function 处理收到的CoAP包,并根据设置的资源对此包进行回复
-//param scratch 	恢复消息的编码格式
+//param scratch 	回复消息的编码格式
 //param inpkt		收到的CoAP包
 //param outpkt		根据inpkt制作好的response包存放在outpkt空间中,outpkt在此函数中被发送
 int coap_handle_req(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt);

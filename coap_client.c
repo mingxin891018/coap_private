@@ -72,15 +72,15 @@ void udp_send_cb(void* arg)
 		);
 }
 
-static bool esp_create_udp(struct espconn *p, esp_udp* udp)
+bool sw_esp_create_udp(struct espconn *p, esp_udp* udp, esp_recv_cb_t arg_recv, esp_sendto_cb_t arg_send)
 {
 	int res = -1;
 
 	p->type = ESPCONN_UDP;
 	p->proto.udp = udp;
 
-	espconn_regist_recvcb(p, &udp_recv_cb);
-	espconn_regist_sentcb(p, &udp_send_cb);
+	espconn_regist_recvcb(p, arg_recv);
+	espconn_regist_sentcb(p, arg_send);
 
 	res = espconn_create(p);
 	if (res != 0){
@@ -122,7 +122,7 @@ static bool coap_client2packet(const coap_client_t *client, const char *tok, int
 	pkt->numopts = 1;
 	pkt->opts[0].buf.p = client->path;
 	pkt->opts[0].buf.len = strlen(client->path);
-	pkt->opts[0].num = 11;
+	pkt->opts[0].num = COAP_OPTION_URI_PATH;
 	
 	//msg
 	pkt->payload.p = NULL;
@@ -359,7 +359,7 @@ bool sw_coap_client_init(unsigned int num)
 	memset(p, 0, sizeof(coap_client_t *) * num);
 	memset(&m_esp_sock, 0, sizeof(m_esp_sock));
 	
-	if(!esp_create_udp(&m_esp_sock.esp_8266, &m_esp_sock.udp)){
+	if(!sw_esp_create_udp(&m_esp_sock.esp_8266, &m_esp_sock.udp, &udp_recv_cb, &udp_send_cb)){
 		ERROR("create esp udp failed!\n");
 		goto INIT_ERR;
 	}

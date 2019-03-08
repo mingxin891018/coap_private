@@ -88,6 +88,9 @@ typedef struct
 
 }coap_client_t;
 
+typedef void (*esp_recv_cb_t)(void *arg, char *pdata, unsigned short len);
+typedef void (*esp_sendto_cb_t)(void* arg);
+
 //初始化CoAP协议客户端，num为同时支持访问的个数
 bool sw_coap_client_init(unsigned int num);
 
@@ -99,5 +102,7 @@ bool sw_coap_client_init(unsigned int num);
 //param  code 返回码2.05  == 200 OK
 //return 是否访问成功
 bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, char *req_data, size_t *req_len, uint8_t *code);
+
+bool sw_esp_create_udp(struct espconn *p, esp_udp* udp, esp_recv_cb_t arg_recv, esp_sendto_cb_t arg_send);
 
 #endif //__COAP_CLIENT_H__
