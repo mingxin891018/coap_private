@@ -55,9 +55,9 @@ void udp_recv_cb(void *arg, char *pdata, unsigned short len)
 			xSemaphoreGive(p->recv_resp_sem);
 			return;
 		}
-		xSemaphoreGive(m_mutex);
-		ERROR("find client handle error\n");
 	}
+	xSemaphoreGive(m_mutex);
+	ERROR("find client handle error\n");
 }
 
 void udp_send_cb(void* arg)
