@@ -117,6 +117,7 @@ void coap_server_udp_recv_cb(void *arg, char *pdata, unsigned short len)
 	
 	send_data.p = p;
 	send_data.len = COAP_DEFAULT_MAX_MESSAGE_SIZE;
+	memset(send_data.p, 0, COAP_DEFAULT_MAX_MESSAGE_SIZE);
 
 	//根据inpkt制作resp data和 resp pkt
 	coap_handle_req(&send_data, &inpkt, &outpkt);
@@ -149,7 +150,7 @@ int coap_server_create(void)
 
 	ret = sw_esp_create_udp(&esp_sock, &udp, &coap_server_udp_recv_cb, &coap_server_udp_send_cb);
 	if(ret != 0){
-		ERROR("create esp udp socket failed!\n");
+		ERROR("create esp udp socket failed,ret=%d\n", ret);
 		return -1;
 	}
 		INFO("create esp udp socket success!\n");
@@ -165,9 +166,10 @@ int coap_server_distroy()
 static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo)
 {
 	char *payload = {"xxxxxxx"};
-
+	
 	coap_make_response(scratch, outpkt, payload, strlen(payload), inpkt->hdr.id[0], inpkt->hdr.id[1], &inpkt->tok, COAP_RSPCODE_CONTENT, COAP_CONTENTTYPE_TEXT_PLAIN);
 	coap_build(scratch->p, &scratch->len, outpkt);
+	INFO("make msg /.well-known/core");
 	return 0;
 }
 
@@ -251,6 +253,7 @@ send_again:
 		count--;
 		goto send_again;
 	}
+	INFO("sendto data len=%d\n", data->len);
 	return 0;
 }
 
