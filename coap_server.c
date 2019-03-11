@@ -42,6 +42,7 @@ static int device_command_file(coap_rw_buffer_t *scratch, const coap_packet_t *i
 static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
 
 static int coap_sendto(struct espconn *udp, coap_rw_buffer_t *data, int count);
+int sw_coap_build_rst(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *pkt);
 
 //网关,应用 ---> 设备
 const static coap_endpoint_path_t elems_path[MAX_RESOURCE_NUM] = {
@@ -84,8 +85,10 @@ void endpoint_setup(void)
 
 bool sw_coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
 {
+	bool ret = true;
+	static char buf[2] = {0};
 	coap_packet_t inpkt = {0}, outpkt = {0};
-	static coap_rw_buffer_t send_data = {0};
+	static coap_rw_buffer_t send_data = {0}, content_type = {0};
 	
 	//解析收到的CoAP报文
 	if(0 != coap_parse(&inpkt, (const uint8_t *)pdata, len)){
@@ -98,23 +101,34 @@ bool sw_coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
 		INFO("malloc server resp data error!\n");
 		return false;
 	}
-	
 	send_data.p = p;
 	send_data.len = COAP_DEFAULT_MAX_MESSAGE_SIZE;
 	memset(send_data.p, 0, COAP_DEFAULT_MAX_MESSAGE_SIZE);
+	content_type.p = buf;
+	content_type.len = sizeof(buf);
+	memset(content_type.p, 0, sizeof(buf));
 
-	//根据inpkt制作resp data和 resp pkt
-	coap_handle_req(&send_data, &inpkt, &outpkt);
-	coap_dumpPacket(&outpkt);
-	
+	if(inpkt.hdr.t == COAP_TYPE_RESET){
+		sw_coap_build_rst(&content_type, &inpkt, &outpkt);
+	}else if(inpkt.hdr.t == COAP_TYPE_CON){
+		//根据inpkt制作resp data和 resp pkt
+		coap_handle_req(&content_type, &inpkt, &outpkt);
+	}
+	else
+		return false;
+	if(send_data.len == 0)
+		return false;
+
 	//发送制作好的resp data
+	coap_dumpPacket(&outpkt);
+	coap_build(send_data.p, &send_data.len, &outpkt);
 	if(0 != coap_sendto(udp, &send_data, 1)){
 		ERROR("coap sendto failed!\n");
-		return false;
+		ret = false;
 	}
 	
 	free(p);
-	return true;
+	return ret;
 }
 
 static int coap_sendto(struct espconn *udp, coap_rw_buffer_t *data, int count)
@@ -144,19 +158,45 @@ int sw_coap_server_distroy(void)
 	return 0;
 }
 
+int sw_coap_build_rst(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *pkt)
+{
+	pkt->hdr.ver = 0x01;
+	pkt->hdr.t = COAP_TYPE_RESET;
+	pkt->hdr.tkl = 0;
+	pkt->hdr.code = COAP_RSPCODE_CONTENT;
+	pkt->hdr.id[0] = inpkt->hdr.id[0];
+	pkt->hdr.id[1] = inpkt->hdr.id[1];
+	pkt->numopts = 1;
+
+	// need token in response
+	if (&inpkt->tok) {
+		pkt->hdr.tkl = inpkt->tok.len;
+		pkt->tok = inpkt->tok;
+	}
+
+	// safe because 1 < MAXOPT
+	pkt->opts[0].num = COAP_OPTION_CONTENT_FORMAT;
+	pkt->opts[0].buf.p = scratch->p;
+	if (scratch->len < 2)
+		return COAP_ERR_BUFFER_TOO_SMALL;
+	pkt->opts[0].buf.len = 2;
+	pkt->payload.p = NULL;
+	pkt->payload.len = 0;
+	return 0;
+
+}
+
 static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo)
 {
 	char *payload = "support CoAP request:\n\"qlink/netinfo\"\n\"qlink/searchack\"\n\"qlink/addgw\"\n\"qlink/querygw\"\n\"device/command/control\"\n\"device/command/data\"\n\"device/command/unbind\"\n\"device/command/file\"\n";
-	
+
 	coap_make_response(scratch, outpkt, payload, strlen(payload), inpkt->hdr.id[0], inpkt->hdr.id[1], &inpkt->tok, COAP_RSPCODE_CONTENT, COAP_CONTENTTYPE_TEXT_PLAIN);
-	coap_build(scratch->p, &scratch->len, outpkt);
 	INFO("make msg \"/.well-known/core\"\n");
-	return 0;
 }
 
 /*
-{
-	“respCode”:xxxx, //1表示成功,0表示参数错误,1000鉴权失败
+   {
+   “respCode”:xxxx, //1表示成功,0表示参数错误,1000鉴权失败
 	“respCont”: “XXXXXX”//respCode=1时忽略
 }
 */

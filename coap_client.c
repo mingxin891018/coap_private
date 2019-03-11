@@ -43,24 +43,25 @@ void udp_recv_cb(void *arg, char *pdata, unsigned short len)
 	}
 	coap_dumpPacket(&pkt);
 
-	xSemaphoreTake(m_mutex, portMAX_DELAY);
-	for(i = 0; i < m_client_max_num; i++){
-		p = m_client_handle[i];
-		if((p != NULL) && (p->msgid[0] == pkt.hdr.id[0]) && (p->msgid[1] == pkt.hdr.id[1]) && (p->result == REQ_WAITTING)){
-			INFO("find client handle[%d] success,MSDID=%02x%02x,pkt.hdr.id=%02x%02x,result=%d.\n", i, p->msgid[0], p->msgid[1], pkt.hdr.id[0], pkt.hdr.id[1],p->result);
-			p->recv_time = time(NULL);
-			memcpy(p->resp_data, pdata, len);
-			p->result = REQ_SUCCESS;
-			xSemaphoreGive(m_mutex);
-			xSemaphoreGive(p->recv_resp_sem);
-			return;
+	if(pkt.hdr.t == COAP_TYPE_ACK){
+		xSemaphoreTake(m_mutex, portMAX_DELAY);
+		for(i = 0; i < m_client_max_num; i++){
+			p = m_client_handle[i];
+			if((p != NULL) && (p->msgid[0] == pkt.hdr.id[0]) && (p->msgid[1] == pkt.hdr.id[1]) && (p->result == REQ_WAITTING)){
+				INFO("find client handle[%d] success,MSDID=%02x%02x,pkt.hdr.id=%02x%02x,result=%d.\n", i, p->msgid[0], p->msgid[1], pkt.hdr.id[0], pkt.hdr.id[1],p->result);
+				p->recv_time = time(NULL);
+				memcpy(p->resp_data, pdata, len);
+				p->result = REQ_SUCCESS;
+				xSemaphoreGive(m_mutex);
+				xSemaphoreGive(p->recv_resp_sem);
+				return;
+			}
 		}
+		xSemaphoreGive(m_mutex);
+		INFO("is request ,sendto response!\n");
 	}
-
-	INFO("is request ,sendto response!\n");
-	xSemaphoreGive(m_mutex);
-	
-	sw_coap_recv_request(udp, pdata, len);
+	else
+		sw_coap_recv_request(udp, pdata, len);
 }
 
 void udp_send_cb(void* arg)
@@ -131,7 +132,7 @@ static bool coap_client2packet(const coap_client_t *client, const char *tok, int
 	pkt->payload.p = NULL;
 	pkt->payload.len = 0;
 	coap_dumpPacket(pkt);
-	
+
 	return true;
 }
 

@@ -209,7 +209,7 @@ void coap_dumpPacket(coap_packet_t *pkt)
 //    printf("Payload: ");
 //    coap_dump(pkt->payload.p, pkt->payload.len, true);
 //    printf("\n");
-    printf("Payload:\nLen=%d\n,msg=%s\n", pkt->payload.len, pkt->payload.p);
+    printf("Payload:\nLen=%d\nmsg=%s\n", pkt->payload.len, pkt->payload.p);
 }
 #endif
 
