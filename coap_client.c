@@ -18,7 +18,7 @@ static unsigned int m_rand = 0;
 void udp_recv_cb(void *arg, char *pdata, unsigned short len) 
 {
 	int i = 0;
-	coap_client_t *p;
+	coap_client_t *p = NULL;
 	coap_packet_t pkt = {0};
 	struct espconn *udp = arg;
 	remot_info *premot = NULL;
@@ -56,8 +56,11 @@ void udp_recv_cb(void *arg, char *pdata, unsigned short len)
 			return;
 		}
 	}
+
+	INFO("is request ,sendto response!\n");
 	xSemaphoreGive(m_mutex);
-	ERROR("find client handle error\n");
+	
+	sw_coap_recv_request(udp, pdata, len);
 }
 
 void udp_send_cb(void* arg)
@@ -359,6 +362,7 @@ bool sw_coap_client_init(unsigned int num)
 	memset(p, 0, sizeof(coap_client_t *) * num);
 	memset(&m_esp_sock, 0, sizeof(m_esp_sock));
 	
+	m_esp_sock.udp.local_port = COAP_DEFAULT_COAP_PORT;
 	if(!sw_esp_create_udp(&m_esp_sock.esp_8266, &m_esp_sock.udp, &udp_recv_cb, &udp_send_cb)){
 		ERROR("create esp udp failed!\n");
 		goto INIT_ERR;

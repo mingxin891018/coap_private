@@ -82,37 +82,21 @@ void endpoint_setup(void)
 	;//set up endpoints
 }
 
-void coap_server_udp_recv_cb(void *arg, char *pdata, unsigned short len) 
+bool sw_coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
 {
-	struct espconn *udp = arg;
-	remot_info *premot = NULL;
 	coap_packet_t inpkt = {0}, outpkt = {0};
 	static coap_rw_buffer_t send_data = {0};
-
-	if(espconn_get_connection_info(udp,&premot,0) == ESPCONN_OK)
-	{    
-		udp->proto.udp->remote_port = premot->remote_port;
-		udp->proto.udp->remote_ip[0] = premot->remote_ip[0];
-		udp->proto.udp->remote_ip[1] = premot->remote_ip[1];
-		udp->proto.udp->remote_ip[2] = premot->remote_ip[2];
-		udp->proto.udp->remote_ip[3] = premot->remote_ip[3];
-
-		INFO("UDP_RECV_CB len:%d ip:%d.%d.%d.%d port:%d\n", len, udp->proto.udp->remote_ip[0],
-				udp->proto.udp->remote_ip[1], udp->proto.udp->remote_ip[2],
-				udp->proto.udp->remote_ip[3], udp->proto.udp->remote_port);
-	}   
 	
 	//解析收到的CoAP报文
 	if(0 != coap_parse(&inpkt, (const uint8_t *)pdata, len)){
 		ERROR("parse coap package error!\n");
-		return ;
+		return false;
 	}   
-	coap_dumpPacket(&inpkt);
 	
 	char *p = malloc(COAP_DEFAULT_MAX_MESSAGE_SIZE);
 	if(p == NULL){
 		INFO("malloc server resp data error!\n");
-		return;
+		return false;
 	}
 	
 	send_data.p = p;
@@ -124,52 +108,49 @@ void coap_server_udp_recv_cb(void *arg, char *pdata, unsigned short len)
 	coap_dumpPacket(&outpkt);
 	
 	//发送制作好的resp data
-	coap_sendto(udp, &send_data, 1);
+	if(0 != coap_sendto(udp, &send_data, 1)){
+		ERROR("coap sendto failed!\n");
+		return false;
+	}
 	
 	free(p);
+	return true;
 }
 
-void coap_server_udp_send_cb(void* arg)
-{
-	struct espconn* udp = arg;
-
-	return;
-
-	INFO("UDP_SEND_CB ip:%d.%d.%d.%d port:%d\n", udp->proto.udp->remote_ip[0],
-			udp->proto.udp->remote_ip[1], udp->proto.udp->remote_ip[2],
-			udp->proto.udp->remote_ip[3], udp->proto.udp->remote_port\
-		);
-}
-
-
-int coap_server_create(void)
+static int coap_sendto(struct espconn *udp, coap_rw_buffer_t *data, int count)
 {
 	int ret = -1;
-	struct espconn esp_sock;
-	esp_udp udp;
-
-	ret = sw_esp_create_udp(&esp_sock, &udp, &coap_server_udp_recv_cb, &coap_server_udp_send_cb);
-	if(ret != 0){
-		ERROR("create esp udp socket failed,ret=%d\n", ret);
-		return -1;
+send_again:
+	ret= espconn_sendto(udp, data->p, data->len);
+	if(0 != ret){
+		INFO("espconn sendto data error,ret=%d\n", ret);
+		if(count <= 0)
+			return ret;
+		vTaskDelay(200 / portTICK_RATE_MS);
+		count--;
+		goto send_again;
 	}
-		INFO("create esp udp socket success!\n");
-
+	INFO("sendto data len=%d\n", data->len);
 	return 0;
 }
 
-int coap_server_distroy()
+int sw_coap_server_create(void)
+{
+	return 0;
+}
+
+int sw_coap_server_distroy(void)
 {
 	return 0;
 }
 
 static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo)
 {
-	char *payload = {"xxxxxxx"};
+	char *payload = "support CoAP request:\n\"qlink/netinfo\"\n\"qlink/searchack\"\n\"qlink/addgw\"\n\"qlink/querygw\"\n\"device/command/control\"\n\"device/command/data\"\n\"device/command/unbind\"\n\"device/command/file\"\n";
 	
 	coap_make_response(scratch, outpkt, payload, strlen(payload), inpkt->hdr.id[0], inpkt->hdr.id[1], &inpkt->tok, COAP_RSPCODE_CONTENT, COAP_CONTENTTYPE_TEXT_PLAIN);
 	coap_build(scratch->p, &scratch->len, outpkt);
-	INFO("make msg /.well-known/core");
+	INFO("make msg \"/.well-known/core\"\n");
 	return 0;
 }
 
@@ -238,22 +219,6 @@ static int device_command_unbind(coap_rw_buffer_t *scratch, const coap_packet_t 
 //设备文件操作
 static int device_command_file(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo)
 {
-	return 0;
-}
-static int coap_sendto(struct espconn *udp, coap_rw_buffer_t *data, int count)
-{
-	int ret = -1;
-send_again:
-	ret= espconn_sendto(udp, data->p, data->len);
-	if(0 != ret){
-		INFO("espconn sendto data error,ret=%d\n", ret);
-		if(count <= 0)
-			return -1;
-		vTaskDelay(200 / portTICK_RATE_MS);
-		count--;
-		goto send_again;
-	}
-	INFO("sendto data len=%d\n", data->len);
 	return 0;
 }
 
