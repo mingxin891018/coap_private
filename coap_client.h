@@ -102,6 +102,7 @@ bool sw_coap_client_init(unsigned int num);
 //param  code 返回码2.05  == 200 OK
 //return 是否访问成功
 bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, char *req_data, size_t *req_len, uint8_t *code);
+int sw_coap_ping(char *ip_str);
 
 bool sw_esp_create_udp(struct espconn *p, esp_udp* udp, esp_recv_cb_t arg_recv, esp_sendto_cb_t arg_send);
 

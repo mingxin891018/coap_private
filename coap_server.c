@@ -108,7 +108,8 @@ bool sw_coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
 	content_type.len = sizeof(buf);
 	memset(content_type.p, 0, sizeof(buf));
 
-	if(inpkt.hdr.t == COAP_TYPE_RESET){
+	if((inpkt.hdr.t == COAP_TYPE_CON) && (inpkt.hdr.code == 0)){
+		//收到 type=con并且code=0.00的包就是ping包
 		sw_coap_build_rst(&content_type, &inpkt, &outpkt);
 	}else if(inpkt.hdr.t == COAP_TYPE_CON){
 		//根据inpkt制作resp data和 resp pkt
@@ -163,7 +164,7 @@ int sw_coap_build_rst(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coa
 	pkt->hdr.ver = 0x01;
 	pkt->hdr.t = COAP_TYPE_RESET;
 	pkt->hdr.tkl = 0;
-	pkt->hdr.code = COAP_RSPCODE_CONTENT;
+	pkt->hdr.code = 0;
 	pkt->hdr.id[0] = inpkt->hdr.id[0];
 	pkt->hdr.id[1] = inpkt->hdr.id[1];
 	pkt->numopts = 1;

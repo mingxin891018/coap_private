@@ -43,7 +43,7 @@ void udp_recv_cb(void *arg, char *pdata, unsigned short len)
 	}
 	coap_dumpPacket(&pkt);
 
-	if(pkt.hdr.t == COAP_TYPE_ACK){
+	if((pkt.hdr.t == COAP_TYPE_ACK) || (pkt.hdr.t == COAP_TYPE_RESET)){
 		xSemaphoreTake(m_mutex, portMAX_DELAY);
 		for(i = 0; i < m_client_max_num; i++){
 			p = m_client_handle[i];
@@ -151,11 +151,14 @@ static bool coap_client2packet(const coap_client_t *client, const char *tok, int
 	}
 
 	//opts
-	ret = path2opts(client->path, &pkt->opts[0]);
-	if(ret == -1)
-		return false;
-	pkt->numopts = ret;
-
+	if(client->path == NULL)
+		pkt->numopts = 0;
+	else{
+		ret = path2opts(client->path, &pkt->opts[0]);
+		if(ret == -1)
+			return false;
+		pkt->numopts = ret;
+	}
 	//msg
 	pkt->payload.p = NULL;
 	pkt->payload.len = 0;
@@ -272,7 +275,6 @@ static int coap_analysis_response(int client_index, char *buf, int *buf_len, uin
 	coap_packet_t pkt;
 	coap_client_t *p = m_client_handle[client_index];
 	
-	*code = 0xff;
 	memset(&pkt, 0, sizeof(pkt));
 	
 	if(m_client_handle[client_index]->result != REQ_SUCCESS){
@@ -284,8 +286,19 @@ static int coap_analysis_response(int client_index, char *buf, int *buf_len, uin
 		ERROR("carse coap msg failed!.ret = %d\n",ret);
 		return -1;
 	}
+	
+	if(pkt.hdr.t == COAP_TYPE_RESET){
+		INFO("type = COAP_TYPE_RESET\n");
+		*code = 0xff;
+		return 0;
+	}
+	else
+		*code = pkt.hdr.code;
 
-	*code = pkt.hdr.code;
+	if(buf == NULL || *buf_len == 0){
+		ERROR("buf error, can not analysis.\n");
+		return -1;
+	}
 	if(*buf_len < pkt.payload.len){
 		INFO("buffer too small,can not copy payload.\n");
 		return -1;
@@ -346,7 +359,7 @@ again:
 	
 }
 
-void ICACHE_FLASH_ATTR wait2timeout(void *pvParameters)
+static void ICACHE_FLASH_ATTR wait2timeout(void *pvParameters)
 {
 	int i = 0;
 	coap_client_t *p = NULL;
@@ -426,47 +439,10 @@ INIT_ERR:
 	return false;
 }
 
-/*coap://10.10.5.32:33200/root/dev/dev1*/
-bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, char *req_data, size_t *req_len, uint8_t *code)
+static bool coap_request(int32_t ip, uint16_t port, const char *path, coap_method_t method, coap_msgtype_t type, char *req_data, size_t *req_len, uint8_t *code)
 {
-	uint32_t ip = 0;
-	uint16_t port = -1;
-	char ip_str[32] = {0};
 	int index = -1, ret = -1;
-	struct in_addr addr = {0};
-	const char *path = NULL, *p = NULL;
-	char *s = NULL;
 	
-	*code = 0xff;
-	p = strstr(url, "coap://");
-	if(p != NULL){
-		s = strstr(p + 7, "/");
-		if(s){
-			strncpy(ip_str, p + 7, s - p - 7);
-			path = s + 1;
-		}else{
-			ERROR("url format error!\n");
-			goto GET_ERROR;
-		}
-	}else{
-		ERROR("mast coap protocol stack 'coap://'.\n");
-		goto GET_ERROR;
-	}
-	
-	if( (s = strstr(ip_str, ":")) != NULL){
-		*(s + 1) = 0;
-		port = atoi(s + 1);
-	}else{
-		port = COAP_DEFAULT_COAP_PORT;
-	}
-
-	ip = CharIp_Trans_Int(ip_str);;
-	if(ip == -1){
-		INFO("ip is error!\n");
-		goto GET_ERROR;
-	}
-
-	INFO("ip_str=%s,port=%d,path=%s\n",ip_str, port, path);
 	while(sntp_get_current_timestamp() == 0){
 		vTaskDelay(1000 / portTICK_RATE_MS);;
 	}
@@ -474,6 +450,7 @@ bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t t
 	
 	m_rand = rand();
 	m_rand += 1;
+	*code = 0xfe;
 	index = coap_client_create(ip, port, path, method, type, NULL, 0);
 	if(index < 0)
 		goto GET_ERROR;
@@ -496,8 +473,79 @@ GET_ERROR:
 	if(index >= 0)
 		coap_client_delete(index);
 	return false;
-
 }
 
+static int coap_url_analysis(const char *url, int32_t *ip, uint16_t *port, const char **path)
+{
+	char ip_str[32] = {0};
+	const char *p = NULL;
+	char *s = NULL;
+	
+	p = strstr(url, "coap://");
+	if(p != NULL){
+		s = strstr(p + 7, "/");
+		if(s){
+			strncpy(ip_str, p + 7, s - p - 7);
+			*path = (s + 1);
+		}else{
+			ERROR("url format error!\n");
+			goto URL_ERROR;
+		}
+	}else{
+		ERROR("mast coap protocol stack 'coap://'.\n");
+		goto URL_ERROR;
+	}
+	
+	if( (s = strstr(ip_str, ":")) != NULL){
+		*(s + 1) = 0;
+		*port = atoi(s + 1);
+	}else{
+		*port = COAP_DEFAULT_COAP_PORT;
+	}
 
+	*ip = CharIp_Trans_Int(ip_str);
+	if(*ip == -1){
+		INFO("ip is error!\n");
+		goto URL_ERROR;
+	}
+
+	INFO("ip_str=%s,port=%d,path=%s\n",ip_str, *port, *path);
+	return 0;
+
+URL_ERROR:
+	return -1;
+}
+
+/*coap://10.10.5.32:33200/root/dev/dev1*/
+bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, char *req_data, size_t *req_len, uint8_t *code)
+{
+	const char *path = NULL;
+	int32_t ip = -1;
+	uint16_t port = 0;
+
+	*code = 0xff;
+	if(coap_url_analysis(url, &ip, &port, &path) != 0)
+		return false;
+	return coap_request(ip, port, path, method, type, req_data, req_len, code);
+}
+
+int sw_coap_ping(char *ip_str)
+{
+	uint8_t code;
+	int32_t ip = -1;
+
+	ip = CharIp_Trans_Int(ip_str);
+	if(ip == -1){
+		INFO("ip is error!\n");
+		return -1;
+	}
+	
+	if(!coap_request(ip, COAP_DEFAULT_COAP_PORT, NULL, 0, COAP_TYPE_CON, NULL, 0, &code))
+		return -1;
+	
+	if(code == 0xff)
+		return 1;
+	else
+		return 0;
+}
 
