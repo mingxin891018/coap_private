@@ -103,8 +103,36 @@ static bool esp_set_remote_ip(uint32_t dst_ip, uint16_t dst_port)
 
 	return true;
 }
+
+static int path2opts(const char *path, coap_option_t *opts)
+{
+	int i = 0;
+	const char *p = strstr(path, "/"), *q = path;
+	while(p != NULL){
+		if(*(p + 1) == '\0')
+			return -1;
+		if(i >= 16)
+			return -1;
+		opts[i].buf.p = q;
+		opts[i].buf.len = p - q;
+		opts[i].num = COAP_OPTION_URI_PATH;
+
+		q = p + 1;
+		p = strstr(p + 1, "/");
+		i++;
+	}
+
+	opts[i].buf.p = q;
+	opts[i].buf.len = strlen(q);
+	opts[i].num = COAP_OPTION_URI_PATH;
+	i++;
+	return i;
+}
+
 static bool coap_client2packet(const coap_client_t *client, const char *tok, int tok_len, coap_packet_t *pkt)
 {
+	int ret = 0;
+
 	//head
 	pkt->hdr.ver = 1;
 	pkt->hdr.t = client->type;
@@ -123,11 +151,11 @@ static bool coap_client2packet(const coap_client_t *client, const char *tok, int
 	}
 
 	//opts
-	pkt->numopts = 1;
-	pkt->opts[0].buf.p = client->path;
-	pkt->opts[0].buf.len = strlen(client->path);
-	pkt->opts[0].num = COAP_OPTION_URI_PATH;
-	
+	ret = path2opts(client->path, &pkt->opts[0]);
+	if(ret == -1)
+		return false;
+	pkt->numopts = ret;
+
 	//msg
 	pkt->payload.p = NULL;
 	pkt->payload.len = 0;
