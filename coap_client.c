@@ -188,6 +188,9 @@ relloc:
 	if(type == COAP_TYPE_CON){
 		vSemaphoreCreateBinary(p->recv_resp_sem);
 		xSemaphoreTake(p->recv_resp_sem, 0);
+		
+		os_timer_disarm(&p->timer2timeout);
+		os_timer_setfn(&p->timer2timeout, (os_timer_func_t *)coap_wait2timeout, p);
 	}
 	
 	esp_set_remote_ip(ip, port);
@@ -215,9 +218,6 @@ relloc:
 		goto CRT_ERROR;
 	}
 	
-	os_timer_disarm(&p->timer2timeout);
-	os_timer_setfn(&p->timer2timeout, (os_timer_func_t *)coap_wait2timeout, p);
-
 	p->result = REQ_INIT;
 	
 
@@ -265,11 +265,16 @@ send_again:
 		ERROR("send client handle[%d] failed,send len=%dret = %d", client_index, p->msg_len, ret);
 		return -1;
 	}
-	os_timer_arm(&p->timer2timeout, COAP_ACK_TIMEOUT, 0);
-	p->result = REQ_WAITTING;
-	INFO("set waitting timer.\n");
+
+	if(p->type == COAP_TYPE_CON){
+		os_timer_arm(&p->timer2timeout, COAP_ACK_TIMEOUT, 0);
+		p->result = REQ_WAITTING;
+		INFO("set waitting timer.\n");
+
+		xSemaphoreTake(p->recv_resp_sem, portMAX_DELAY);
+	}else
+		p->result = REQ_SUCCESS;
 	
-	xSemaphoreTake(p->recv_resp_sem, portMAX_DELAY);
 	return 0;
 }
 
@@ -281,12 +286,20 @@ static int coap_analysis_response(int client_index, char *buf, int *buf_len, uin
 	
 	memset(&pkt, 0, sizeof(pkt));
 	
-	os_timer_disarm(&p->timer2timeout);
-	if(m_client_handle[client_index]->result != REQ_SUCCESS){
+	if(p->result != REQ_SUCCESS){
 		INFO("client handle[%d], bad request!, result = %d\n", client_index, p->result);
 		return -1;
 	}
+	
+	if(p->type == COAP_TYPE_NONCON){
+		memset(buf, 0, *buf_len);
+		*buf_len = 0;
+		*code = 0x45;
+		INFO("request type is COAP_TYPE_NONCON\n");
+		return 0;
+	}
 
+	os_timer_disarm(&p->timer2timeout);
 	if(0 != (ret = coap_parse(&pkt, p->resp_data, p->resp_len))){
 		ERROR("carse coap msg failed!.ret = %d\n",ret);
 		return -1;
@@ -331,10 +344,12 @@ wait:
 		goto wait;
 	}
 	
+	if(p->type == COAP_TYPE_CON)
+		vSemaphoreDelete(p->recv_resp_sem);
+	
 	m_client_handle[client_index] = NULL;
 	xSemaphoreGive(m_mutex);
 	
-	vSemaphoreDelete(p->recv_resp_sem);
 	free(p);
 	
 	INFO("free client handle[%d] success!\n", client_index);
@@ -376,7 +391,7 @@ static void  coap_wait2timeout(void* ptr)
 	
 	xSemaphoreGive(client->recv_resp_sem);
 
-	INFO("client handle:%p is timeout!", ptr);
+	INFO("client handle:%p is timeout!\n", ptr);
 }
 
 bool sw_coap_client_init(unsigned int num)
