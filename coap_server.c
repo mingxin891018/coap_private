@@ -22,13 +22,15 @@
 #include "coap.h"
 #include "coap_server.h"
 #include "coap_client.h"
+#include "cJSON.h"
 
 #include "sw_common.h"
 
 #define MAX_RESOURCE_NUM 10
 
 //wifi配置引导接口
-static int qlink_netinfo(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
+static int andlink_netinfo(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
+#if 0
 static int link_searchack(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
 static int qlink_addgw(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
 static int qlink_querygw(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
@@ -38,7 +40,7 @@ static int device_command_control(coap_rw_buffer_t *scratch, const coap_packet_t
 static int device_command_data(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
 static int device_command_unbind(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
 static int device_command_file(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
-
+#endif
 static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
 
 static int coap_sendto(struct espconn *udp, coap_rw_buffer_t *data, int count);
@@ -53,10 +55,10 @@ const static coap_endpoint_path_t elems_path[MAX_RESOURCE_NUM] = {
 	{2, "qlink", "addgw"	, 	NULL },
 	{2, "qlink", "querygw"	, 	NULL },
 	
-	{3, "device", "command", "control"	},
 	{3, "device", "command", "data"		},
 	{3, "device", "command", "unbind"	},
 	{3, "device", "command", "file"		},
+	{3, "device", "command", "file"		}, //qlink/netinfo
 	
 	{0, NULL, NULL, NULL}
 };
@@ -65,7 +67,8 @@ const static coap_endpoint_path_t elems_path[MAX_RESOURCE_NUM] = {
 const const coap_endpoint_t endpoints[MAX_RESOURCE_NUM] = {
 	{COAP_METHOD_GET,  &well_known_core, 		&elems_path[0], NULL},
 	
-	{COAP_METHOD_POST, &qlink_netinfo, 			&elems_path[1], NULL},
+	{COAP_METHOD_POST, &andlink_netinfo, 		&elems_path[1], NULL},
+#if 0
 	{COAP_METHOD_POST, &link_searchack, 		&elems_path[2], NULL},
 	{COAP_METHOD_POST, &qlink_addgw, 			&elems_path[3],	NULL},
 	{COAP_METHOD_POST, &qlink_querygw, 			&elems_path[4],	NULL},
@@ -74,6 +77,7 @@ const const coap_endpoint_t endpoints[MAX_RESOURCE_NUM] = {
 	{COAP_METHOD_POST, &device_command_data, 	&elems_path[6],	NULL},
 	{COAP_METHOD_POST, &device_command_unbind, 	&elems_path[7],	NULL},
 	{COAP_METHOD_POST, &device_command_file, 	&elems_path[8],	NULL},
+#endif
 	{0, NULL, NULL, NULL}
 };
 
@@ -195,6 +199,60 @@ static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt
 	INFO("make msg \"/.well-known/core\"\n");
 }
 
+static os_timer_t m_restar_timer;
+static char m_ssid[32] = {0};
+static char m_passwd[64] = {0};
+
+static void dev_restart_callback(void *ret)
+{
+	if(wifi_get_opmode() != STATION_MODE)
+	{
+		struct station_config sta_conf;
+		int ret = 0;
+		ret = wifi_set_opmode_current(STATION_MODE);
+		if(ret)
+		{
+			INFO("ssid %s,passwd %s\n",m_ssid,m_passwd);
+			memcpy(sta_conf.ssid,m_ssid,32);
+			memcpy(sta_conf.password,m_passwd,64);
+			sta_conf.bssid_set = 0;
+			ret = wifi_station_set_config(&sta_conf);
+			if(ret)
+			{
+				os_timer_disarm(&m_restar_timer);
+				ret = STATION_MODE;
+				system_rtc_mem_write(64,&ret,sizeof(ret));
+				system_restart();
+			}
+		}
+	}
+}
+#if 1
+static int andlink_parse(const char *pdata)
+{
+	cJSON *root = NULL;
+	cJSON *js = NULL;
+	int ret = 0;
+	root = cJSON_Parse(pdata);
+	if(root == NULL)
+		goto END;
+	js = cJSON_GetObjectItem(root,"SSID");
+	if(js == NULL || js->type != cJSON_String)
+		goto END;
+	memcpy(m_ssid,js->valuestring,strlen(js->valuestring));
+
+	js = cJSON_GetObjectItem(root,"password");
+	if(js == NULL || js->type != cJSON_String)
+		goto END;
+	memcpy(m_passwd,js->valuestring,strlen(js->valuestring));
+	ret = 1;
+END:
+	if(root)
+		cJSON_Delete(root);
+	return  ret;
+}
+
+#endif
 /*
    {
    “respCode”:xxxx, //1表示成功,0表示参数错误,1000鉴权失败
@@ -203,12 +261,36 @@ static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt
 */
 //根据inpkt制作resp data和 resp pkt
 //通知设备入网信息
-static int qlink_netinfo(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo)
+static int andlink_netinfo(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo)
 {
 	
+	static char payload[32] ={0};
+	int ret = 0;
+	int error = 0;
+	memset(payload,0,sizeof(payload));
+	if(inpkt->payload.len > 0 && inpkt->payload.p)
+	{
+		INFO("xiexiang msg = %s\n",inpkt->payload.p);
+		ret = andlink_parse(inpkt->payload.p);
+		if(ret == 0)
+			error = 999;
+	}
+	ret = snprintf(payload,sizeof(payload),"{\"respCode\":%d",ret,error);
+	if(error > 0)
+		ret += snprintf(payload+ret,sizeof(payload)-ret,",\"respCont\":\"%d\"",error);
+	snprintf(payload+ret,sizeof(payload)-ret,"}");
+	coap_make_response(scratch, outpkt, payload, strlen(payload), inpkt->hdr.id[0], inpkt->hdr.id[1], &inpkt->tok, COAP_RSPCODE_CONTENT, COAP_CONTENTTYPE_TEXT_PLAIN);
+	INFO("resp: %s\n",payload);
+	if(ret > 0) // 定时重启设备
+	{
+		os_timer_disarm(&m_restar_timer);
+		os_timer_setfn(&m_restar_timer, dev_restart_callback, NULL);
+		os_timer_arm(&m_restar_timer,1000,1);
+	}
 	return 0;
 }
 
+#if 0
 /*
 若设备未注册(已注册的设备忽略该请求)，则返回如下响应：
 {
@@ -262,4 +344,4 @@ static int device_command_file(coap_rw_buffer_t *scratch, const coap_packet_t *i
 {
 	return 0;
 }
-
+#endif
