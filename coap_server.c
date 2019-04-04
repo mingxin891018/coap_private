@@ -158,7 +158,7 @@ int sw_coap_server_create(void)
 	return 0;
 }
 
-int sw_coap_server_distroy(void)
+int sw_coap_server_destroy(void)
 {
 	return 0;
 }

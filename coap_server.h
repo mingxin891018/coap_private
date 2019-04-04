@@ -10,7 +10,7 @@
 #define __COAP_SERVER_H__
 
 int sw_coap_server_create(void);
-int sw_coap_server_distroy(void);
+int sw_coap_server_destroy(void);
 bool sw_coap_recv_request(struct espconn *udp, char *pdata, unsigned short len);
 
 #endif //__COAP_SERVER_H__
