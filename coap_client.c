@@ -56,7 +56,7 @@ typedef struct {
 
 	req_resule_t result;
 
-	char msg_data[128];
+	char msg_data[512+128];
 	size_t msg_len;
 
 	char resp_data[1024];
@@ -161,17 +161,17 @@ static bool param_list_add_node(param_list_t *list, param_node *node)
 static param_list_free(param_list_t *list)
 {
 	int i = 0;
-	param_node *node = NULL;
+	param_node *node = NULL, *next = NULL;
 	if(list == NULL)
 		return;
 
 	node = list->next;
 	while(node != NULL){
+		next = node->next;
 		if(node->data)
 			free(node->data);
 		free(node);
-		node = NULL;
-		node = node->next;
+		node = next;
 		i++;
 	}
 
@@ -721,7 +721,8 @@ static bool coap_request(int32_t ip, uint16_t port, param_list_t *list, coap_met
 	if(ret < 0)
 		goto GET_ERROR;
 	INFO("get resq success,client handle[%d].\n", index);
-
+	
+	memset(req_data, 0, *req_len);
 	ret = coap_analysis_response(index, req_data, req_len, code);
 	if(ret != 0)
 		goto GET_ERROR;
@@ -748,17 +749,24 @@ static bool is_coap(const char *url)
 static int32_t find_ip(const char *url)
 {
 	const char *ip = url + 7;
-	char str[32] = {0};
-	memset(str, 0, sizeof(str));
+	char host[64] = {0};
+	char ip_str[32] = {0};
+	memset(host, 0, sizeof(host));
+	memset(ip_str, 0, sizeof(ip_str));
 	
 	char *p = strstr(ip, ":");
 	if(p == NULL)
 		p = strstr(ip, "/");
 	
 	if(p != NULL){
-		memcpy(str, ip, p - ip);
-		INFO("ip_str=%s\n", str);
-		return CharIp_Trans_Int(str);
+		memcpy(host, ip, p - ip);
+		INFO("host=%s\n", host);
+		if(is_address(host))
+			return CharIp_Trans_Int(ip_str);
+		else if(GetServerIp(host, ip_str) == 0)
+			return CharIp_Trans_Int(ip_str);
+		else 
+			return -1;
 	}
 	return -1;
 }
@@ -903,6 +911,9 @@ static int coap_url_analysis(const char *url, int32_t *ip, uint16_t *port, param
 
 /*coap://10.10.5.32:33200/root/dev/dev1?param1=a&param2=2&format=3*/
 //int sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type,  req_buffer_t data,uint8_t *code)
+
+//*req_len :缓冲区长度
+//buf_len :发送的payload长度
 bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, char *req_data,size_t *req_len, size_t buf_len, uint8_t *code)
 {
 	const char *path = NULL;
