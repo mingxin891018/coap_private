@@ -9,7 +9,7 @@
 #ifndef __COAP_CLIENT_H__
 #define __COAP_CLIENT_H__
 
-#include "freertos/FreeRTOS.h" 
+#include "freertos/FreeRTOS.h"                                                                                                                                                               
 #include "freertos/task.h" 
 #include "freertos/semphr.h" 
 #include "freertos/portmacro.h"
@@ -22,6 +22,7 @@
 #include "c_types.h"
 #include "espconn/espconn.h"
 
+#include "sw_common.h"
 #include "coap.h"
 
 //CoAP协议绑定的UDP端口
@@ -45,47 +46,13 @@
 //消息块长
 #define COAP_DEFAULT_DEFAULT_BLOCK_SIZE 512
 
-///////////////////////
-typedef enum
-{
-	REQ_UNUSE = 1       ,   
-	REQ_INIT            ,   
-	REQ_SEND_FAILED     ,   
-	REQ_WAITTING        ,   
-
-	REQ_TIMEOUT         ,   
-	REQ_FAILED          ,   
-	REQ_SUCCESS
-} req_resule_t;
-
-typedef void (*udp_send_cb_t)(void* arg);
-typedef void (*udp_recv_cb_t)(void *arg, char *pdata, unsigned short len);
+//typedef void (*udp_send_cb_t)(void* arg);
+//typedef void (*udp_recv_cb_t)(void *arg, char *pdata, unsigned short len);
 
 typedef struct espconn_udp_ {
 	struct espconn esp_8266;
 	esp_udp udp;
 } espconn_udp_t;
-
-typedef struct
-{
-	const char *path;
-	int send_count;
-	os_timer_t timer2timeout;
-	xSemaphoreHandle recv_resp_sem;
-
-	uint8_t msgid[2];
-	coap_method_t method;
-	coap_msgtype_t type;
-	
-	req_resule_t result;
-
-	char msg_data[128];
-	size_t msg_len;
-
-	char resp_data[1024];
-	size_t resp_len;
-
-}coap_client_t;
 
 typedef void (*esp_recv_cb_t)(void *arg, char *pdata, unsigned short len);
 typedef void (*esp_sendto_cb_t)(void* arg);

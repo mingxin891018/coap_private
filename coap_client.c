@@ -7,7 +7,62 @@
 *
 *===============================================================*/
 #include "coap_client.h"
-#include "sw_common.h"
+
+typedef enum
+{
+	REQ_UNUSE = 1       ,   
+	REQ_INIT            ,   
+	REQ_SEND_FAILED     ,   
+	REQ_WAITTING        ,   
+
+	REQ_TIMEOUT         ,   
+	REQ_FAILED          ,   
+	REQ_SUCCESS
+} req_resule_t;
+
+typedef struct req_buffer_ {
+	char *p;
+	size_t pl;
+	size_t inl;
+}req_buffer_t;
+
+typedef struct param_node_ {
+	char *n;
+	uint32_t nl;
+	char *v;
+	uint32_t vl;
+	char *data;
+	struct param_node_ *next;
+} param_node;
+
+typedef struct param_list_ {
+	uint8_t format;
+	uint32_t param_num;
+	param_node *next;
+}param_list_t;
+
+typedef struct {
+	//const char *path;
+	
+	param_list_t *plist;
+	
+	int send_count;
+	os_timer_t timer2timeout;
+	xSemaphoreHandle recv_resp_sem;
+
+	uint8_t msgid[2];
+	coap_method_t method;
+	coap_msgtype_t type;
+
+	req_resule_t result;
+
+	char msg_data[128];
+	size_t msg_len;
+
+	char resp_data[1024];
+	size_t resp_len;
+
+}coap_client_t;
 
 static coap_client_t **m_client_handle = NULL;
 static int m_client_max_num = 0;
@@ -16,6 +71,148 @@ static xSemaphoreHandle m_mutex = NULL;
 static unsigned int m_rand = 0;
 
 static void  coap_wait2timeout(void* ptr);
+
+static param_node *new_node(const char *name, uint32_t nl, const char *value, uint32_t vl)
+{
+	char *data = NULL;
+	param_node *new = NULL;
+	
+	if(name == NULL || nl <= 0){
+		INFO("node name is NULL\n");
+		return NULL;
+	}
+	
+	new = (param_node *)malloc(sizeof(param_node));
+	if(new == NULL)
+		goto err;
+	
+	data = malloc(nl + 1 + vl + 1); //+\0
+	if(data == NULL)
+		goto err;
+
+	memset(new, 0, sizeof(param_node));
+	memset(data, 0, nl + 1 + vl + 1);
+
+	strncpy(data, name, nl);
+	strncpy(data + nl, "=", 1);
+	strncpy(data + nl + 1, value, vl);
+
+	new->n = data;
+	new->v = data + nl + 1;
+	new->nl = nl;
+	new->vl = vl;
+	new->data = data;
+	new->next = NULL;
+
+	return new;
+
+err:
+	if(data)
+		free(data);
+	if(new)
+		free(new);
+	return NULL;
+}
+
+static void param_node_free(param_node *node)
+{
+	if(node == NULL)
+		return ;
+	if(node->n != NULL)
+		free(node->n);
+	if(node->v != NULL)
+		free(node->v);
+	free(node);
+}
+
+static void param_print(param_list_t *list)
+{
+	int i = 0;
+	param_node *node = NULL;
+
+	if(list == NULL)
+		return ;
+
+	INFO("param number=%d\n", list->param_num);
+	for(node = list->next; node != NULL; node = node->next)
+		INFO("data:%s\n", node->data);
+}
+
+static bool param_list_add_node(param_list_t *list, param_node *node)
+{
+	param_node *pn = NULL;
+
+	if(list ==NULL || node == NULL)
+		return false;
+	if(list->next == NULL){
+		list->next = node;
+		list->param_num ++;
+		INFO("add node success,param_num=%d\n", list->param_num);
+		return true;
+	}
+	for(pn = list->next; pn->next != NULL; pn = pn->next);
+	
+	pn->next = node;
+	node->next = NULL;
+	list->param_num ++;
+	INFO("add node success,param_num=%d\n", list->param_num);
+}
+
+static param_list_free(param_list_t *list)
+{
+	int i = 0;
+	param_node *node = NULL;
+	if(list == NULL)
+		return;
+
+	node = list->next;
+	while(node != NULL){
+		if(node->data)
+			free(node->data);
+		free(node);
+		node = NULL;
+		node = node->next;
+		i++;
+	}
+
+	INFO("list[%p] has %d nodes,free over\n", list, i);
+	list->param_num = 0;
+	list->next = NULL;
+}
+
+static param_node *param_find_node(param_list_t *list, const char *name, uint32_t nl)
+{
+	param_node *pn = NULL;
+
+	for(pn = list->next; pn != NULL; pn = pn->next){
+		if((memcmp(name, pn->n, nl) == 0) && (pn->nl == nl))
+			return pn;
+	}
+	
+	return NULL;
+}
+
+static bool param_delete_node(param_list_t *list, param_node *node)
+{
+	param_node *pb = NULL;
+	param_node *pn = param_find_node(list, node->n, node->nl);
+	if(pn == NULL){
+		ERROR("can not find node=%s\n", node->n);
+		return false;
+	}
+	if(list->next == pn){
+		list->next = pn->next;
+		param_node_free(pn);
+	}
+
+	pb = list->next;
+	while(pb->next != pn)
+		pb = pb->next;
+	pb->next = pn->next;
+	free(pn);
+
+	return true;
+}
 
 void udp_recv_cb(void *arg, char *pdata, unsigned short len) 
 {
@@ -105,32 +302,102 @@ static bool esp_set_remote_ip(uint32_t dst_ip, uint16_t dst_port)
 	return true;
 }
 
-static int path2opts(const char *path, coap_option_t *opts)
+static bool is_equal(param_node *node, const char *str)
+{
+	int len = strlen(str);
+	if((0 == memcmp(node->n, str, node->nl)) && (len == node->nl))
+		return true;
+	return false;
+}
+
+static int str2num(const char *str)
+{
+	if(!strcmp(str, "text/plain"))
+		return 0;
+	else if(!strcmp(str, "application/link-format"))
+		return 40;
+	else if(!strcmp(str, "application/xml"))
+		return 41;
+	else if(!strcmp(str, "application/octet-stream"))
+		return 42;
+	else if(!strcmp(str, "application/exi"))
+		return 47;
+	else if(!strcmp(str, "application/json"))
+		return 50;
+	else
+		return 0;
+}
+
+static int list2opts(param_list_t *list, coap_option_t *opts)
 {
 	int i = 0;
-	const char *p = strstr(path, "/"), *q = path;
-	while(p != NULL){
-		if(*(p + 1) == '\0')
-			return -1;
-		if(i >= 16)
-			return -1;
-		opts[i].buf.p = q;
-		opts[i].buf.len = p - q;
-		opts[i].num = COAP_OPTION_URI_PATH;
+	const char *p = NULL, *q = NULL;
+	
+	if(list == NULL)
+		return 0;
 
-		q = p + 1;
-		p = strstr(p + 1, "/");
+	//opt 11
+	param_node *node = param_find_node(list, "path", strlen("path"));
+	if(node != NULL){
+		q = node->v;
+		p = strstr(node->v, "/"); 
+		while(p != NULL){
+			if(*(p + 1) == '\0')
+				return -1;
+			if(i >= MAXOPT)
+				return -1;
+			opts[i].buf.p = q;
+			opts[i].buf.len = p - q;
+			opts[i].num = COAP_OPTION_URI_PATH;
+			INFO("i=%d,path=%s,len=%d\n", i, q, opts[i].buf.len);
+
+			q = p + 1;
+			p = strstr(p + 1, "/");
+			i++;
+		}
+
+		opts[i].buf.p = q;
+		opts[i].buf.len = strlen(q);
+		opts[i].num = COAP_OPTION_URI_PATH;
+		INFO("i=%d,path=%s,len=%d\n", i, q, opts[i].buf.len);
 		i++;
 	}
 
-	opts[i].buf.p = q;
-	opts[i].buf.len = strlen(q);
-	opts[i].num = COAP_OPTION_URI_PATH;
-	i++;
+	//opt 12
+	node = param_find_node(list, "Content-Format", strlen("Content-Format"));
+	if(node != NULL && i < MAXOPT - 1){
+		list->format = str2num(node->v);
+		opts[i].buf.p = (char *)&list->format;
+		opts[i].buf.len = sizeof(list->format);
+		opts[i].num = COAP_OPTION_CONTENT_FORMAT;
+		INFO("i=%d,opt12=%d,len=%d\n", i, list->format, opts[i].buf.len);
+		i++;
+	}
+
+	//opt 15
+	node = list->next;
+	while(node != NULL && i < MAXOPT - 1){
+		if(is_equal(node, "Content-Format")){
+			INFO("find param[Content-Format]\n");
+			node = node->next;
+			continue;
+		}
+		if(is_equal(node, "path")){
+			INFO("find param[path]\n");
+			node = node->next;
+			continue;
+		}
+		opts[i].buf.p = node->data;
+		opts[i].buf.len = node->vl + node->nl + 1;
+		opts[i].num = COAP_OPTION_URI_QUERY;
+		node = node->next;
+		INFO("i=%d,path=%s,len=%d\n", i, opts[i].buf.p, opts[i].buf.len);
+		i++;
+	}
 	return i;
 }
 
-static bool coap_client2packet(const coap_client_t *client, const char *tok, int tok_len, coap_packet_t *pkt, char *p, int len)
+static bool coap_client2packet(coap_client_t *client, const char *tok, int tok_len, coap_packet_t *pkt, char *p, int len)
 {
 	int ret = 0;
 
@@ -152,14 +419,10 @@ static bool coap_client2packet(const coap_client_t *client, const char *tok, int
 	}
 
 	//opts
-	if(client->path == NULL)
-		pkt->numopts = 0;
-	else{
-		ret = path2opts(client->path, &pkt->opts[0]);
-		if(ret == -1)
-			return false;
-		pkt->numopts = ret;
-	}
+	ret = list2opts(client->plist, &pkt->opts[0]);
+	pkt->numopts = ret;
+	INFO("numopts=%d\n", pkt->numopts);
+
 	//msg
 	pkt->payload.p = p;
 	pkt->payload.len = len;
@@ -168,7 +431,7 @@ static bool coap_client2packet(const coap_client_t *client, const char *tok, int
 	return true;
 }
 
-static int coap_client_create(uint32_t ip, uint16_t port, const char*path, coap_method_t method, coap_msgtype_t type, const char *tok, int tok_len, char *pdata, int len)
+static int coap_client_create(uint32_t ip, uint16_t port, param_list_t *list, coap_method_t method, coap_msgtype_t type, const char *tok, int tok_len, char *pdata, int len)
 {
 	int i = 0, msg_len = 0, ret = -1;
 	coap_client_t *p = NULL;
@@ -196,7 +459,7 @@ relloc:
 	esp_set_remote_ip(ip, port);
 
 	//填写数据到结构体,初始化信号量
-	p->path = path;
+	p->plist = list;
 	p->send_count = 0;
 	p->msgid[0] = (m_rand & 0xff);
 	p->msgid[1] = ((m_rand & 0xff00) >> 8);
@@ -437,7 +700,7 @@ INIT_ERR:
 	return false;
 }
 
-static bool coap_request(int32_t ip, uint16_t port, const char *path, coap_method_t method, coap_msgtype_t type, char *req_data, size_t buf_len, size_t *req_len, uint8_t *code)
+static bool coap_request(int32_t ip, uint16_t port, param_list_t *list, coap_method_t method, coap_msgtype_t type, char *req_data, size_t buf_len, size_t *req_len, uint8_t *code)
 {
 	int index = -1, ret = -1;
 	
@@ -449,7 +712,7 @@ static bool coap_request(int32_t ip, uint16_t port, const char *path, coap_metho
 	m_rand = rand();
 	m_rand += 1;
 	*code = 0xfe;
-	index = coap_client_create(ip, port, path, method, type, NULL, 0, req_data, buf_len);
+	index = coap_client_create(ip, port, list, method, type, NULL, 0, req_data, buf_len);
 	if(index < 0)
 		goto GET_ERROR;
 	INFO("create client handle[%d] success!\n", index);
@@ -473,57 +736,193 @@ GET_ERROR:
 	return false;
 }
 
-static int coap_url_analysis(const char *url, int32_t *ip, uint16_t *port, const char **path)
+//coap://10.10.5.32:33200/root/dev/dev1?param1=a&param2=2&format=3
+static bool is_coap(const char *url)
 {
-	char ip_str[32] = {0};
-	const char *p = NULL;
-	char *s = NULL;
-	p = strstr(url, "coap://");
-	if(p != NULL){
-		s = strstr(p + 7, "/");
-		if(s){
-			strncpy(ip_str, p + 7, s - p - 7);
-			*path = (s + 1);
-		}else{
-			ERROR("url format error!\n");
-			goto URL_ERROR;
-		}
-	}else{
-		ERROR("mast coap protocol stack 'coap://'.\n");
-		goto URL_ERROR;
-	}
+	char *p = strstr(url, "coap://");
+	if(*url == *p)
+		return true;
+	return false;
+}
+
+static int32_t find_ip(const char *url)
+{
+	const char *ip = url + 7;
+	char str[32] = {0};
+	memset(str, 0, sizeof(str));
 	
-	if( (s = strstr(ip_str, ":")) != NULL){
-		*s = '\0';
-		*port = atoi(s + 1);
-	}else{
-		*port = COAP_DEFAULT_COAP_PORT;
+	char *p = strstr(ip, ":");
+	if(p == NULL)
+		p = strstr(ip, "/");
+	
+	if(p != NULL){
+		memcpy(str, ip, p - ip);
+		INFO("ip_str=%s\n", str);
+		return CharIp_Trans_Int(str);
 	}
-
-	*ip = CharIp_Trans_Int(ip_str);
-	if(*ip == -1){
-		INFO("ip is error!\n");
-		goto URL_ERROR;
-	}
-
-	INFO("ip_str=%s,port=%d,path=%s\n",ip_str, *port, *path);
-	return 0;
-
-URL_ERROR:
 	return -1;
 }
 
-/*coap://10.10.5.32:33200/root/dev/dev1*/
+static int find_port(const char *url)
+{
+	char str[8] = {0};
+	char *p = strstr(url, ":");
+	char *q = strstr(url, "/");
+
+	memset(str, 0, sizeof(str));
+	if(p != NULL && q != NULL && ((q - p) > 0)){
+		memcpy(str, p, q - p);
+		INFO("port_str=%s\n", str);
+		return atoi(str);
+	}
+	return -1;
+}
+
+static bool check_param(const char *url)
+{
+	int len = strlen(url);
+	char *p = strstr(url, "?");
+	if(p == NULL){
+		if(url[len - 1] == '/'){
+			ERROR("check_param error!\n");
+			return false;
+		}
+	}else{
+		if(*(p - 1) == '/'){
+			ERROR("check_param error!\n");
+			return false;
+		}
+	}
+	
+	return true;
+}
+
+static void add_param(param_list_t *list, const char *str, int len)
+{
+	if(len <= 1 || list == NULL)
+		return ;
+	
+	param_node *node = NULL;
+	char *p = strstr(str, "=");
+	if(p == NULL){
+		ERROR("param format error.\n");
+		return;
+	}else if(*p == *str){
+		ERROR("param format error.\n");
+		return;
+	}
+	node = new_node(str, p - str, p + 1, len - (p - str) - 1);
+	param_list_add_node(list, node);
+	INFO("param[%s] add success!\n", node->data);
+}
+
+//coap://10.10.18.253/.well-known/core?ddxx=sdfd==&asdfd=dfdsfsd=dsfd=d
+static bool param2list(const char *url, param_list_t *list)
+{
+	int l = 0, pl = 0;
+	param_node *node = NULL;
+	char *p = strstr(url, "?"), *q = strstr(url, "/");
+	
+	if(q == NULL)
+		return false;
+	
+	if(p == NULL){
+		//path
+		l = strlen(q) - 1;
+		if(l > 0){
+			node = new_node("path", strlen("path"), (const char *)(q + 1), l);
+			param_list_add_node(list, node);
+		}
+		return true;
+	}
+	else{
+		//path
+		node = new_node("path", strlen("path"), (const char *)(q + 1), p - q - 1);
+		param_list_add_node(list, node);
+
+		//第一个param '?xxx=xxx&'
+		l = p - q - 1; //防止路径为'/?'
+		if(l > 0){
+			pl = strlen(p); //防止url以'?'结尾
+			if(pl <= 2){
+				return true;
+			}
+			q = strstr(url, "&");
+			if(q == NULL) { //只有一个参数'?xxx=xxx'
+				add_param(list, (const char *)(p + 1), strlen(p + 1));
+				return true;
+			}
+			else{
+				add_param(list, (const char *)(p + 1), q - p - 1); //, 两个或者以上参数 添加第一个参数
+			}
+		}
+	}
+
+	//param
+	p = strstr(q + 1, "&");
+	while(p != NULL){
+		INFO("node=%s.len=%d\n", (q + 1), p - q - 1);
+		add_param(list, (q + 1), p - q - 1);
+		INFO("node=%s.len=%d\n", (q + 1), p - q - 1);
+		q = p;
+		p = strstr(q+1, "&");
+	}
+	INFO("node=%s.len=%d\n",q+1, strlen(q) - 1);
+	add_param(list, (q + 1), strlen(q) - 1);
+	INFO("node=%s.len=%d\n",q+1, strlen(q) - 1);
+
+	return true;
+}
+
+//coap://10.10.5.32:33200/root/dev/dev1?param1=a&param2=2&format=3
+static int coap_url_analysis(const char *url, int32_t *ip, uint16_t *port, param_list_t *list)
+{
+	char *param = NULL, *end = NULL;
+	
+	if(url == NULL || !is_coap(url))
+		return -1;
+	
+	*ip = find_ip(url);
+	if(*ip == -1)
+		return -1;
+	
+	*port = find_port(url);
+	if(*port <= 0)
+		*port = COAP_DEFAULT_COAP_PORT;
+	
+	INFO("coap ip=%d,port=%d\n", *ip, *port);
+	
+	if(check_param(url) && param2list((url + 7), list)){
+		INFO("url analysis success!\n");
+		param_print(list);
+		return 0;
+	}
+	
+	return -1;
+}
+
+/*coap://10.10.5.32:33200/root/dev/dev1?param1=a&param2=2&format=3*/
+//int sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type,  req_buffer_t data,uint8_t *code)
 bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, char *req_data,size_t *req_len, size_t buf_len, uint8_t *code)
 {
 	const char *path = NULL;
 	int32_t ip = -1;
 	uint16_t port = 0;
+	param_list_t list;
+
 	INFO("url = %s\n",url);
 	*code = 0xff;
-	if(coap_url_analysis(url, &ip, &port, &path) != 0)
+
+	memset(&list, 0, sizeof(param_list_t));
+	list.format = 0;
+	list.param_num = 0;
+	list.next = NULL;
+	if(coap_url_analysis(url, &ip, &port, &list) != 0)
 		return false;
-	return coap_request(ip, port, path, method, type, req_data, buf_len, req_len, code);
+	bool ret = coap_request(ip, port, &list, method, type, req_data, buf_len, req_len, code);
+	param_list_free(&list);
+
+	return ret;
 }
 
 int sw_coap_ping(char *ip_str)
