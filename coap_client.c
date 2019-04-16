@@ -71,6 +71,30 @@ static unsigned int m_rand = 0;
 
 static void  coap_wait2timeout(void* ptr);
 
+static uint32_t malloc_size = 0;
+static uint32_t malloc_count = 0;
+static uint32_t free_count = 0;
+
+void *coap_malloc(size_t size)
+{
+	void *p = NULL;
+
+	p = malloc(size);
+	if(p){
+		malloc_size += size;
+		malloc_count++;
+		printf("[coap_malloc]:malloc ptr:%p,size:%u, count:%d, tatal_size:%u\n", p, size, malloc_count, malloc_size);
+	}
+	return p;
+}
+
+void coap_free(void *ptr)
+{
+	free_count++;
+	printf("[coap_free]:free_ptr:%p, free_count:%u\n", ptr, free_count);
+	free(ptr);
+}
+
 static param_node *new_node(const char *name, uint32_t nl, const char *value, uint32_t vl)
 {
 	char *data = NULL;
@@ -81,11 +105,11 @@ static param_node *new_node(const char *name, uint32_t nl, const char *value, ui
 		return NULL;
 	}
 	
-	new = (param_node *)malloc(sizeof(param_node));
+	new = (param_node *)coap_malloc(sizeof(param_node));
 	if(new == NULL)
 		goto err;
 	
-	data = malloc(nl + 1 + vl + 1); //+\0
+	data = coap_malloc(nl + 1 + vl + 1); //+\0
 	if(data == NULL)
 		goto err;
 
@@ -107,9 +131,9 @@ static param_node *new_node(const char *name, uint32_t nl, const char *value, ui
 
 err:
 	if(data)
-		free(data);
+		coap_free(data);
 	if(new)
-		free(new);
+		coap_free(new);
 	return NULL;
 }
 
@@ -118,8 +142,8 @@ static void param_node_free(param_node *node)
 	if(node == NULL)
 		return ;
 	if(node->data != NULL)
-		free(node->data);
-	free(node);
+		coap_free(node->data);
+	coap_free(node);
 }
 
 static void param_print(param_list_t *list)
@@ -166,8 +190,8 @@ static param_list_free(param_list_t *list)
 	while(node != NULL){
 		next = node->next;
 		if(node->data)
-			free(node->data);
-		free(node);
+			coap_free(node->data);
+		coap_free(node);
 		node = next;
 		i++;
 	}
@@ -438,9 +462,9 @@ static int coap_client_create(uint32_t ip, uint16_t port, param_list_t *list, co
 	srand((unsigned)time(NULL));
 	
 relloc:
-	p = (coap_client_t *)malloc(sizeof(coap_client_t));
+	p = (coap_client_t *)coap_malloc(sizeof(coap_client_t));
 	if(p == NULL){
-		ERROR("malloc client error!\n");
+		ERROR("coap_malloc client error!\n");
 		vTaskDelay(1000 / portTICK_RATE_MS);
 		goto relloc;
 	}
@@ -503,7 +527,7 @@ relloc:
 CRT_ERROR:
 	if(p){
 		vSemaphoreDelete(p->recv_resp_sem);
-		free(p);
+		coap_free(p);
 	}
 	return -1;
 }
@@ -548,7 +572,7 @@ static coap_result_t *coap_analysis_response(int client_index)
 	
 	os_timer_disarm(&p->timer2timeout);
 	
-	rel = (coap_result_t *)malloc(sizeof(coap_result_t));
+	rel = (coap_result_t *)coap_malloc(sizeof(coap_result_t));
 	if(rel == NULL)
 		goto resp_over;
 	memset(rel, 0, sizeof(coap_result_t));
@@ -565,7 +589,7 @@ static coap_result_t *coap_analysis_response(int client_index)
 		goto resp_over;
 	}
 
-	data = malloc(p->resp_len + 1);
+	data = coap_malloc(p->resp_len + 1);
 	if(data == NULL){
 		rel->code = COAP_RSPCODE_NOT_FOUND;
 		goto resp_over;
@@ -612,7 +636,7 @@ wait:
 	m_client_handle[client_index] = NULL;
 	xSemaphoreGive(m_mutex);
 	
-	free(p);
+	coap_free(p);
 	
 	INFO("free client handle[%d] success!\n", client_index);
 	return true;
@@ -634,7 +658,7 @@ again:
 	espconn_delete(&m_esp_sock.esp_8266);
 
 	if(m_client_handle){
-		free(m_client_handle);
+		coap_free(m_client_handle);
 		m_client_handle = NULL;
 		INFO("client handle free success!\n");
 	}else{
@@ -660,9 +684,9 @@ bool sw_coap_client_init(unsigned int num)
 {
 	int ret;
 
-	coap_client_t **p = (coap_client_t **)malloc(sizeof(coap_client_t *) * num);
+	coap_client_t **p = (coap_client_t **)coap_malloc(sizeof(coap_client_t *) * num);
 	if(p == NULL){
-		ERROR("malloc client handle error!,init client failed!");
+		ERROR("coap_malloc client handle error!,init client failed!");
 		goto INIT_ERR;
 	}
 	
@@ -693,7 +717,7 @@ bool sw_coap_client_init(unsigned int num)
 
 INIT_ERR:
 	if(p){
-		free(p);
+		coap_free(p);
 		p = NULL;
 	}
 	return false;
@@ -911,8 +935,8 @@ void sw_coap_result_free(coap_result_t *rel)
 {
 	if(rel){
 		if(rel->d)
-			free(rel->d);
-		free(rel);
+			coap_free(rel->d);
+		coap_free(rel);
 	}
 }
 

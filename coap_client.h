@@ -109,4 +109,7 @@ function	销毁创建好的client客户端(需在sw_coap_client_init成功的时
 *********************************************************************************************/
 void sw_coap_destory(void);
 
+void *coap_malloc(size_t size);
+void coap_free(void *ptr);
+
 #endif //__COAP_CLIENT_H__

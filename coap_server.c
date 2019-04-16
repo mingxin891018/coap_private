@@ -100,7 +100,7 @@ bool sw_coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
 		return false;
 	}   
 	
-	char *p = malloc(COAP_DEFAULT_MAX_MESSAGE_SIZE);
+	char *p = coap_malloc(COAP_DEFAULT_MAX_MESSAGE_SIZE);
 	if(p == NULL){
 		INFO("malloc server resp data error!\n");
 		return false;
@@ -119,10 +119,15 @@ bool sw_coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
 		//根据inpkt制作resp data和 resp pkt
 		coap_handle_req(&content_type, &inpkt, &outpkt);
 	}
-	else
-		return false;
-	if(send_data.len == 0)
-		return false;
+	else{
+		ret = false;
+		goto req_err;
+	}
+
+	if(send_data.len == 0){
+		ret = false;
+		goto req_err;
+	}
 
 	//发送制作好的resp data
 	coap_dumpPacket(&outpkt);
@@ -132,7 +137,8 @@ bool sw_coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
 		ret = false;
 	}
 	
-	free(p);
+req_err:
+	coap_free(p);
 	return ret;
 }
 
