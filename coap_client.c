@@ -42,7 +42,6 @@ typedef struct param_list_ {
 }param_list_t;
 
 typedef struct {
-	//const char *path;
 	
 	param_list_t *plist;
 	
@@ -118,10 +117,8 @@ static void param_node_free(param_node *node)
 {
 	if(node == NULL)
 		return ;
-	if(node->n != NULL)
-		free(node->n);
-	if(node->v != NULL)
-		free(node->v);
+	if(node->data != NULL)
+		free(node->data);
 	free(node);
 }
 
@@ -209,7 +206,7 @@ static bool param_delete_node(param_list_t *list, param_node *node)
 	while(pb->next != pn)
 		pb = pb->next;
 	pb->next = pn->next;
-	free(pn);
+	param_node_free(pn);
 
 	return true;
 }
@@ -249,6 +246,7 @@ void udp_recv_cb(void *arg, char *pdata, unsigned short len)
 			if((p != NULL) && (p->msgid[0] == pkt.hdr.id[0]) && (p->msgid[1] == pkt.hdr.id[1]) && (p->result == REQ_WAITTING)){
 				INFO("find client handle[%d] success,MSDID=%02x%02x,pkt.hdr.id=%02x%02x,result=%d.\n", i, p->msgid[0], p->msgid[1], pkt.hdr.id[0], pkt.hdr.id[1],p->result);
 				memcpy(p->resp_data, pdata, len);
+				p->resp_len = len;
 				p->result = REQ_SUCCESS;
 				xSemaphoreGive(m_mutex);
 				xSemaphoreGive(p->recv_resp_sem);
@@ -397,7 +395,7 @@ static int list2opts(param_list_t *list, coap_option_t *opts)
 	return i;
 }
 
-static bool coap_client2packet(coap_client_t *client, const char *tok, int tok_len, coap_packet_t *pkt, char *p, int len)
+static bool coap_client2packet(coap_client_t *client, const char *tok, int tok_len, coap_packet_t *pkt, const char *p, int len)
 {
 	int ret = 0;
 
@@ -431,7 +429,7 @@ static bool coap_client2packet(coap_client_t *client, const char *tok, int tok_l
 	return true;
 }
 
-static int coap_client_create(uint32_t ip, uint16_t port, param_list_t *list, coap_method_t method, coap_msgtype_t type, const char *tok, int tok_len, char *pdata, int len)
+static int coap_client_create(uint32_t ip, uint16_t port, param_list_t *list, coap_method_t method, coap_msgtype_t type, const char *tok, int tok_len, const char *pdata, int len)
 {
 	int i = 0, msg_len = 0, ret = -1;
 	coap_client_t *p = NULL;
@@ -541,56 +539,57 @@ send_again:
 	return 0;
 }
 
-static int coap_analysis_response(int client_index, char *buf, int *buf_len, uint8_t *code)
+static coap_result_t *coap_analysis_response(int client_index)
 {
 	int ret = -1;
-	coap_packet_t pkt;
+	char *data = NULL;
+	coap_result_t *rel = NULL;
 	coap_client_t *p = m_client_handle[client_index];
 	
-	memset(&pkt, 0, sizeof(pkt));
+	os_timer_disarm(&p->timer2timeout);
+	
+	rel = (coap_result_t *)malloc(sizeof(coap_result_t));
+	if(rel == NULL)
+		goto resp_over;
+	memset(rel, 0, sizeof(coap_result_t));
+
+	if(p->type == COAP_TYPE_NONCON){
+		rel->code = COAP_RSPCODE_CONTENT;
+		INFO("request type is COAP_TYPE_NONCON\n");
+		goto resp_over;
+	}
 	
 	if(p->result != REQ_SUCCESS){
+		rel->code = COAP_RSPCODE_NOT_FOUND;
 		INFO("client handle[%d], bad request!, result = %d\n", client_index, p->result);
-		return -1;
-	}
-	
-	if(p->type == COAP_TYPE_NONCON){
-		memset(buf, 0, *buf_len);
-		*buf_len = 0;
-		*code = 0x45;
-		INFO("request type is COAP_TYPE_NONCON\n");
-		return 0;
+		goto resp_over;
 	}
 
-	os_timer_disarm(&p->timer2timeout);
-	if(0 != (ret = coap_parse(&pkt, p->resp_data, p->resp_len))){
+	data = malloc(p->resp_len + 1);
+	if(data == NULL){
+		rel->code = COAP_RSPCODE_NOT_FOUND;
+		goto resp_over;
+	}
+	memset(data, 0, p->resp_len + 1);
+	memcpy(data, p->resp_data, p->resp_len);
+	rel->d = data;
+	rel->dl = p->resp_len;
+	ret = coap_parse(&rel->pkt, rel->d, rel->dl);
+	if(ret != 0){
 		ERROR("carse coap msg failed!.ret = %d\n",ret);
-		return -1;
+		rel->code = COAP_RSPCODE_NOT_FOUND;
+		goto resp_over;
 	}
 	
-	if(pkt.hdr.t == COAP_TYPE_RESET){
+	if(rel->pkt.hdr.t == COAP_TYPE_RESET){
+		rel->code = COAP_RSPCODE_NOT_FOUND;
 		INFO("type = COAP_TYPE_RESET\n");
-		*code = 0xff;
-		return 0;
 	}
 	else
-		*code = pkt.hdr.code;
+		rel->code = rel->pkt.hdr.code;
 
-	if(buf == NULL || *buf_len == 0){
-		ERROR("buf error, can not analysis.\n");
-		return -1;
-	}
-	if(*buf_len < pkt.payload.len){
-		INFO("buffer too small,can not copy payload.\n");
-		return -1;
-	}
-	*buf_len = 0;
-	if(pkt.payload.len > 0){
-		memcpy(buf, pkt.payload.p, pkt.payload.len);
-		*buf_len = pkt.payload.len;
-	}
-
-	return 0;
+resp_over:
+	return rel;
 }
 
 static bool coap_client_delete(int client_index)
@@ -700,10 +699,11 @@ INIT_ERR:
 	return false;
 }
 
-static bool coap_request(int32_t ip, uint16_t port, param_list_t *list, coap_method_t method, coap_msgtype_t type, char *req_data, size_t buf_len, size_t *req_len, uint8_t *code)
+static coap_result_t *coap_request(int32_t ip, uint16_t port, param_list_t *list, coap_method_t method, coap_msgtype_t type, const char *req_data, size_t buf_len)
 {
 	int index = -1, ret = -1;
-	
+	coap_result_t *re = NULL;
+
 	while(sntp_get_current_timestamp() == 0){
 		vTaskDelay(1000 / portTICK_RATE_MS);;
 	}
@@ -711,7 +711,7 @@ static bool coap_request(int32_t ip, uint16_t port, param_list_t *list, coap_met
 	
 	m_rand = rand();
 	m_rand += 1;
-	*code = 0xfe;
+	
 	index = coap_client_create(ip, port, list, method, type, NULL, 0, req_data, buf_len);
 	if(index < 0)
 		goto GET_ERROR;
@@ -722,19 +722,13 @@ static bool coap_request(int32_t ip, uint16_t port, param_list_t *list, coap_met
 		goto GET_ERROR;
 	INFO("get resq success,client handle[%d].\n", index);
 	
-	memset(req_data, 0, *req_len);
-	ret = coap_analysis_response(index, req_data, req_len, code);
-	if(ret != 0)
-		goto GET_ERROR;
+	re = coap_analysis_response(index);
 	INFO("analysis client handle[%d] success!\n", index);
 	
-	coap_client_delete(index);
-	return true;
-
 GET_ERROR:
 	if(index >= 0)
 		coap_client_delete(index);
-	return false;
+	return re;
 }
 
 //coap://10.10.5.32:33200/root/dev/dev1?param1=a&param2=2&format=3
@@ -786,22 +780,28 @@ static int find_port(const char *url)
 	return -1;
 }
 
-static bool check_param(const char *url)
+static bool check_path(const char *url)
 {
 	int len = strlen(url);
-	char *p = strstr(url, "?");
-	if(p == NULL){
-		if(url[len - 1] == '/'){
-			ERROR("check_param error!\n");
+	char *p = strstr(url, "/");
+	char *q = strstr(p, "?");
+
+	if(p == NULL)
+		return false;
+
+	if(q == NULL){
+		//路径为 '/', '/xxx/xx/'
+		if(*(p + strlen(p) - 1) == '/'){
+			ERROR("path is '/', '/xxx/xx/'\n");
 			return false;
 		}
 	}else{
-		if(*(p - 1) == '/'){
-			ERROR("check_param error!\n");
+		//路径为 '/?', '/xxx/?'
+		if(*(q - 1) == '/'){ 
+			ERROR("path is '/?', '/xxx/?'\n");
 			return false;
 		}
 	}
-	
 	return true;
 }
 
@@ -827,57 +827,55 @@ static void add_param(param_list_t *list, const char *str, int len)
 //coap://10.10.18.253/.well-known/core?ddxx=sdfd==&asdfd=dfdsfsd=dsfd=d
 static bool param2list(const char *url, param_list_t *list)
 {
-	int l = 0, pl = 0;
+	int l = 0;
 	param_node *node = NULL;
-	char *p = strstr(url, "?"), *q = strstr(url, "/");
-	
+	char *q = strstr(url, "/");
+	char *p = strstr(q + 1, "?");
+	char *m = NULL;
+
 	if(q == NULL)
 		return false;
-	
+
 	if(p == NULL){
-		//path
+		//path /xx/yy/zz
 		l = strlen(q) - 1;
-		if(l > 0){
-			node = new_node("path", strlen("path"), (const char *)(q + 1), l);
-			param_list_add_node(list, node);
-		}
+		node = new_node("path", strlen("path"), (const char *)(q + 1), l);
+		param_list_add_node(list, node);
 		return true;
 	}
 	else{
-		//path
+		//path '/xx/yy/zz?', '/xx/yy/zz?xxx=xxx'
+		if(strlen(p) == 1)
+			return true;
 		node = new_node("path", strlen("path"), (const char *)(q + 1), p - q - 1);
 		param_list_add_node(list, node);
 
-		//第一个param '?xxx=xxx&'
-		l = p - q - 1; //防止路径为'/?'
-		if(l > 0){
-			pl = strlen(p); //防止url以'?'结尾
-			if(pl <= 2){
-				return true;
-			}
-			q = strstr(url, "&");
-			if(q == NULL) { //只有一个参数'?xxx=xxx'
-				add_param(list, (const char *)(p + 1), strlen(p + 1));
-				return true;
-			}
-			else{
-				add_param(list, (const char *)(p + 1), q - p - 1); //, 两个或者以上参数 添加第一个参数
-			}
+		m = strstr(p, "&");
+		if(m == NULL) {
+			//只有一个参数param '/xx/yy/zz?xxx=xxx'
+			add_param(list, (const char *)(p + 1), strlen(p) + 1);
+			return true;
+		}
+		else{ 
+			//两个或者以上参数 添加第一个参数 '/xx/yy/zz?xxx=xxx&', '/xx/yy/zz?xxx=xxx&yyy=yyy'
+			add_param(list, (const char *)(p + 1), m - p - 1);
 		}
 	}
 
 	//param
-	p = strstr(q + 1, "&");
+	p = strstr(m + 1, "&");
 	while(p != NULL){
-		INFO("node=%s.len=%d\n", (q + 1), p - q - 1);
-		add_param(list, (q + 1), p - q - 1);
-		INFO("node=%s.len=%d\n", (q + 1), p - q - 1);
-		q = p;
-		p = strstr(q+1, "&");
+		INFO("node=%s.len=%d\n", (m + 1), p - m - 1);
+		add_param(list, (m + 1), p - m - 1);
+		INFO("node=%s.len=%d\n", (m + 1), p - m - 1);
+		m = p;
+		if(*(m + 1) == '\0')
+			return true;
+		p = strstr(m + 1, "&");
 	}
-	INFO("node=%s.len=%d\n",q+1, strlen(q) - 1);
-	add_param(list, (q + 1), strlen(q) - 1);
-	INFO("node=%s.len=%d\n",q+1, strlen(q) - 1);
+	INFO("node=%s.len=%d\n",m + 1, strlen(m) - 1);
+	add_param(list, (m + 1), strlen(m) - 1);
+	INFO("node=%s.len=%d\n",m + 1, strlen(m) - 1);
 
 	return true;
 }
@@ -900,7 +898,7 @@ static int coap_url_analysis(const char *url, int32_t *ip, uint16_t *port, param
 	
 	INFO("coap ip=%d,port=%d\n", *ip, *port);
 	
-	if(check_param(url) && param2list((url + 7), list)){
+	if(check_path(url + 7) && param2list((url + 7), list)){
 		INFO("url analysis success!\n");
 		param_print(list);
 		return 0;
@@ -909,37 +907,42 @@ static int coap_url_analysis(const char *url, int32_t *ip, uint16_t *port, param
 	return -1;
 }
 
-/*coap://10.10.5.32:33200/root/dev/dev1?param1=a&param2=2&format=3*/
-//int sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type,  req_buffer_t data,uint8_t *code)
+void sw_coap_result_free(coap_result_t *rel)
+{
+	if(rel){
+		if(rel->d)
+			free(rel->d);
+		free(rel);
+	}
+}
 
-//*req_len :缓冲区长度
-//buf_len :发送的payload长度
-bool sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, char *req_data,size_t *req_len, size_t buf_len, uint8_t *code)
+coap_result_t *sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, const char *payload, size_t pl)
 {
 	const char *path = NULL;
 	int32_t ip = -1;
 	uint16_t port = 0;
 	param_list_t list;
+	coap_result_t *rel = NULL;
 
 	INFO("url = %s\n",url);
-	*code = 0xff;
 
 	memset(&list, 0, sizeof(param_list_t));
 	list.format = 0;
 	list.param_num = 0;
 	list.next = NULL;
 	if(coap_url_analysis(url, &ip, &port, &list) != 0)
-		return false;
-	bool ret = coap_request(ip, port, &list, method, type, req_data, buf_len, req_len, code);
+		return NULL;
+	rel = coap_request(ip, port, &list, method, type, payload, pl);
 	param_list_free(&list);
 
-	return ret;
+	return rel;
 }
 
 int sw_coap_ping(char *ip_str)
 {
-	uint8_t code;
+	int ret = 0;
 	int32_t ip = -1;
+	coap_result_t *rel = NULL;
 
 	ip = CharIp_Trans_Int(ip_str);
 	if(ip == -1){
@@ -947,12 +950,16 @@ int sw_coap_ping(char *ip_str)
 		return -1;
 	}
 	
-	if(!coap_request(ip, COAP_DEFAULT_COAP_PORT, NULL, 0, COAP_TYPE_CON, NULL, 0, NULL, &code))
-		return -1;
+	rel = coap_request(ip, COAP_DEFAULT_COAP_PORT, NULL, 0, COAP_TYPE_CON, NULL, 0);
+	if(rel == NULL)
+		ret = -1;
 	
-	if(code == 0xff)
-		return 1;
+	if(rel->code == 0xff)
+		ret = 1;
 	else
-		return 0;
+		ret = 0;
+	sw_coap_result_free(rel);
+
+	return ret;
 }
 
