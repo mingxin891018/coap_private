@@ -20,12 +20,6 @@ typedef enum
 	REQ_SUCCESS
 } req_resule_t;
 
-typedef struct req_buffer_ {
-	char *p;
-	size_t pl;
-	size_t inl;
-}req_buffer_t;
-
 typedef struct param_node_ {
 	char *n;
 	uint32_t nl;
@@ -69,32 +63,6 @@ static espconn_udp_t m_esp_sock = {0};
 static xSemaphoreHandle m_mutex = NULL;
 static unsigned int m_rand = 0;
 
-static void  coap_wait2timeout(void* ptr);
-
-static uint32_t malloc_size = 0;
-static uint32_t malloc_count = 0;
-static uint32_t free_count = 0;
-
-void *coap_malloc(size_t size)
-{
-	void *p = NULL;
-
-	p = malloc(size);
-	if(p){
-		malloc_size += size;
-		malloc_count++;
-		printf("[coap_malloc]:malloc ptr:%p,size:%u, count:%d, tatal_size:%u\n", p, size, malloc_count, malloc_size);
-	}
-	return p;
-}
-
-void coap_free(void *ptr)
-{
-	free_count++;
-	printf("[coap_free]:free_ptr:%p, free_count:%u\n", ptr, free_count);
-	free(ptr);
-}
-
 static param_node *new_node(const char *name, uint32_t nl, const char *value, uint32_t vl)
 {
 	char *data = NULL;
@@ -105,11 +73,11 @@ static param_node *new_node(const char *name, uint32_t nl, const char *value, ui
 		return NULL;
 	}
 	
-	new = (param_node *)coap_malloc(sizeof(param_node));
+	new = (param_node *)malloc(sizeof(param_node));
 	if(new == NULL)
 		goto err;
 	
-	data = coap_malloc(nl + 1 + vl + 1); //+\0
+	data = malloc(nl + 1 + vl + 1); //+\0
 	if(data == NULL)
 		goto err;
 
@@ -131,9 +99,9 @@ static param_node *new_node(const char *name, uint32_t nl, const char *value, ui
 
 err:
 	if(data)
-		coap_free(data);
+		free(data);
 	if(new)
-		coap_free(new);
+		free(new);
 	return NULL;
 }
 
@@ -142,8 +110,8 @@ static void param_node_free(param_node *node)
 	if(node == NULL)
 		return ;
 	if(node->data != NULL)
-		coap_free(node->data);
-	coap_free(node);
+		free(node->data);
+	free(node);
 }
 
 static void param_print(param_list_t *list)
@@ -190,8 +158,8 @@ static param_list_free(param_list_t *list)
 	while(node != NULL){
 		next = node->next;
 		if(node->data)
-			coap_free(node->data);
-		coap_free(node);
+			free(node->data);
+		free(node);
 		node = next;
 		i++;
 	}
@@ -233,6 +201,106 @@ static bool param_delete_node(param_list_t *list, param_node *node)
 	param_node_free(pn);
 
 	return true;
+}
+
+static int coap_sendto(struct espconn *udp, coap_rw_buffer_t *data, int count)
+{
+	int ret = -1;
+send_again:
+	ret= espconn_sendto(udp, data->p, data->len);
+	if(0 != ret){
+		INFO("espconn sendto data error,ret=%d\n", ret);
+		if(count <= 0)
+			return ret;
+		vTaskDelay(200 / portTICK_RATE_MS);
+		count--;
+		goto send_again;
+	}
+	INFO("sendto data len=%d\n", data->len);
+	return 0;
+}
+
+static int coap_build_rst(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *pkt)
+{
+	pkt->hdr.ver = 0x01;
+	pkt->hdr.t = COAP_TYPE_RESET;
+	pkt->hdr.tkl = 0;
+	pkt->hdr.code = 0;
+	pkt->hdr.id[0] = inpkt->hdr.id[0];
+	pkt->hdr.id[1] = inpkt->hdr.id[1];
+	pkt->numopts = 1;
+
+	// need token in response
+	if (&inpkt->tok) {
+		pkt->hdr.tkl = inpkt->tok.len;
+		pkt->tok = inpkt->tok;
+	}
+
+	// safe because 1 < MAXOPT
+	pkt->opts[0].num = COAP_OPTION_CONTENT_FORMAT;
+	pkt->opts[0].buf.p = scratch->p;
+	if (scratch->len < 2)
+		return COAP_ERR_BUFFER_TOO_SMALL;
+	pkt->opts[0].buf.len = 2;
+	pkt->payload.p = NULL;
+	pkt->payload.len = 0;
+	return 0;
+
+}
+
+static bool coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
+{
+	bool ret = true;
+	static char buf[2] = {0};
+	coap_packet_t inpkt = {0}, outpkt = {0};
+	static coap_rw_buffer_t send_data = {0}, content_type = {0};
+
+	//解析收到的CoAP报文
+	if(0 != coap_parse(&inpkt, (const uint8_t *)pdata, len)){
+		ERROR("parse coap package error!\n");
+		return false;
+	}
+
+	char *p = malloc(COAP_DEFAULT_MAX_MESSAGE_SIZE);
+	if(p == NULL){
+		INFO("malloc server resp data error!\n");
+		return false;
+	}
+	send_data.p = p;
+	send_data.len = COAP_DEFAULT_MAX_MESSAGE_SIZE;
+	memset(send_data.p, 0, COAP_DEFAULT_MAX_MESSAGE_SIZE);
+	content_type.p = buf;
+	content_type.len = sizeof(buf);
+	memset(content_type.p, 0, sizeof(buf));
+
+	if((inpkt.hdr.t == COAP_TYPE_CON) && (inpkt.hdr.code == 0)){
+		//收到 type=con并且code=0.00的包就是ping包
+		coap_build_rst(&content_type, &inpkt, &outpkt);
+	}else if(inpkt.hdr.t == COAP_TYPE_CON){
+		//根据inpkt制作resp data和 resp pkt
+		coap_handle_req(&content_type, &inpkt, &outpkt);
+	}
+	else{
+		ret = false;
+		goto req_ret;
+	}
+
+	if(send_data.len == 0){
+		ret = false;
+		goto req_ret;
+	}
+
+	//发送制作好的resp data
+	coap_dumpPacket(&outpkt);
+	coap_build(send_data.p, &send_data.len, &outpkt);
+	if(0 != coap_sendto(udp, &send_data, 1)){
+		ERROR("coap sendto failed!\n");
+		ret = false;
+	}
+
+req_ret:
+	free(p);
+	return ret;
 }
 
 void udp_recv_cb(void *arg, char *pdata, unsigned short len) 
@@ -281,10 +349,10 @@ void udp_recv_cb(void *arg, char *pdata, unsigned short len)
 		INFO("can not find handle!\n");
 	}
 	else
-		sw_coap_recv_request(udp, pdata, len);
+		coap_recv_request(udp, pdata, len);
 }
 
-void udp_send_cb(void* arg)
+static void udp_send_cb(void* arg)
 {
 	struct espconn* udp = arg;
 
@@ -322,6 +390,19 @@ static bool esp_set_remote_ip(uint32_t dst_ip, uint16_t dst_port)
 	m_esp_sock.udp.remote_ip[0] = (dst_ip & 0xff000000) >> 24;
 
 	return true;
+}
+
+static void  coap_wait2timeout(void* ptr)
+{
+	coap_client_t *client = ( coap_client_t *)ptr;
+	
+	xSemaphoreTake(m_mutex, portMAX_DELAY);
+	client->result = REQ_TIMEOUT;
+	xSemaphoreGive(m_mutex);
+	
+	xSemaphoreGive(client->recv_resp_sem);
+
+	INFO("client handle:%p is timeout!\n", ptr);
 }
 
 static bool is_equal(param_node *node, const char *str)
@@ -462,9 +543,9 @@ static int coap_client_create(uint32_t ip, uint16_t port, param_list_t *list, co
 	srand((unsigned)time(NULL));
 	
 relloc:
-	p = (coap_client_t *)coap_malloc(sizeof(coap_client_t));
+	p = (coap_client_t *)malloc(sizeof(coap_client_t));
 	if(p == NULL){
-		ERROR("coap_malloc client error!\n");
+		ERROR("malloc client error!\n");
 		vTaskDelay(1000 / portTICK_RATE_MS);
 		goto relloc;
 	}
@@ -527,7 +608,7 @@ relloc:
 CRT_ERROR:
 	if(p){
 		vSemaphoreDelete(p->recv_resp_sem);
-		coap_free(p);
+		free(p);
 	}
 	return -1;
 }
@@ -572,7 +653,7 @@ static coap_result_t *coap_analysis_response(int client_index)
 	
 	os_timer_disarm(&p->timer2timeout);
 	
-	rel = (coap_result_t *)coap_malloc(sizeof(coap_result_t));
+	rel = (coap_result_t *)malloc(sizeof(coap_result_t));
 	if(rel == NULL)
 		goto resp_over;
 	memset(rel, 0, sizeof(coap_result_t));
@@ -589,7 +670,7 @@ static coap_result_t *coap_analysis_response(int client_index)
 		goto resp_over;
 	}
 
-	data = coap_malloc(p->resp_len + 1);
+	data = malloc(p->resp_len + 1);
 	if(data == NULL){
 		rel->code = COAP_RSPCODE_NOT_FOUND;
 		goto resp_over;
@@ -636,7 +717,7 @@ wait:
 	m_client_handle[client_index] = NULL;
 	xSemaphoreGive(m_mutex);
 	
-	coap_free(p);
+	free(p);
 	
 	INFO("free client handle[%d] success!\n", client_index);
 	return true;
@@ -658,7 +739,7 @@ again:
 	espconn_delete(&m_esp_sock.esp_8266);
 
 	if(m_client_handle){
-		coap_free(m_client_handle);
+		free(m_client_handle);
 		m_client_handle = NULL;
 		INFO("client handle free success!\n");
 	}else{
@@ -667,26 +748,14 @@ again:
 	
 }
 
-static void  coap_wait2timeout(void* ptr)
-{
-	coap_client_t *client = ( coap_client_t *)ptr;
-	
-	xSemaphoreTake(m_mutex, portMAX_DELAY);
-	client->result = REQ_TIMEOUT;
-	xSemaphoreGive(m_mutex);
-	
-	xSemaphoreGive(client->recv_resp_sem);
-
-	INFO("client handle:%p is timeout!\n", ptr);
-}
 
 bool sw_coap_client_init(unsigned int num)
 {
 	int ret;
 
-	coap_client_t **p = (coap_client_t **)coap_malloc(sizeof(coap_client_t *) * num);
+	coap_client_t **p = (coap_client_t **)malloc(sizeof(coap_client_t *) * num);
 	if(p == NULL){
-		ERROR("coap_malloc client handle error!,init client failed!");
+		ERROR("malloc client handle error!,init client failed!");
 		goto INIT_ERR;
 	}
 	
@@ -717,7 +786,7 @@ bool sw_coap_client_init(unsigned int num)
 
 INIT_ERR:
 	if(p){
-		coap_free(p);
+		free(p);
 		p = NULL;
 	}
 	return false;
@@ -755,7 +824,6 @@ GET_ERROR:
 	return re;
 }
 
-//coap://10.10.5.32:33200/root/dev/dev1?param1=a&param2=2&format=3
 static bool is_coap(const char *url)
 {
 	char *p = strstr(url, "coap://");
@@ -780,7 +848,7 @@ static int32_t find_ip(const char *url)
 		memcpy(host, ip, p - ip);
 		INFO("host=%s\n", host);
 		if(is_address(host))
-			return CharIp_Trans_Int(ip_str);
+			return CharIp_Trans_Int(host);
 		else if(GetServerIp(host, ip_str) == 0)
 			return CharIp_Trans_Int(ip_str);
 		else 
@@ -848,7 +916,6 @@ static void add_param(param_list_t *list, const char *str, int len)
 	INFO("param[%s] add success!\n", node->data);
 }
 
-//coap://10.10.18.253/.well-known/core?ddxx=sdfd==&asdfd=dfdsfsd=dsfd=d
 static bool param2list(const char *url, param_list_t *list)
 {
 	int l = 0;
@@ -920,7 +987,7 @@ static int coap_url_analysis(const char *url, int32_t *ip, uint16_t *port, param
 	if(*port <= 0)
 		*port = COAP_DEFAULT_COAP_PORT;
 	
-	INFO("coap ip=%d,port=%d\n", *ip, *port);
+	INFO("coap ip=%d:%d:%d:%d,port=%d\n", ((*ip)&0xff000000)>>24,((*ip)&0xff0000)>>16,((*ip)&0xff00)>>8,((*ip)&0xff), *port);
 	
 	if(check_path(url + 7) && param2list((url + 7), list)){
 		INFO("url analysis success!\n");
@@ -935,8 +1002,8 @@ void sw_coap_result_free(coap_result_t *rel)
 {
 	if(rel){
 		if(rel->d)
-			coap_free(rel->d);
-		coap_free(rel);
+			free(rel->d);
+		free(rel);
 	}
 }
 
