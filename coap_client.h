@@ -63,8 +63,6 @@ typedef struct coap_result_ {
 	uint8_t code;
 } coap_result_t;
 
-typedef int (*resp_cb_t)(char *pdata, unsigned short len);
-
 /*********************************************************************************************
 function	创建一个ESP8266 UDP 套接字
 param	p			ESP8266 套接字结构体指针
