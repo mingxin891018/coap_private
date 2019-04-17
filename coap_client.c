@@ -60,7 +60,6 @@ typedef struct {
 static espconn_udp_t m_esp_sock = {0};
 static xSemaphoreHandle m_mutex = NULL;
 
-static resp_cb_t m_resp_cb = NULL;
 static coap_client_t **m_client_handle = NULL;
 static unsigned int m_rand = 0;
 static int m_client_max_num = 0;
@@ -274,13 +273,6 @@ static int coap_build_rst(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt,
 
 }
 
-int sw_set_resp_cb(resp_cb_t resp_cb)
-{
-	if(resp_cb)
-		m_resp_cb = resp_cb;
-	return 0;
-}
-
 static bool coap_recv_request(struct espconn *udp, char *pdata, unsigned short len)
 {
 	int handle_ret = 0;
@@ -333,10 +325,6 @@ static bool coap_recv_request(struct espconn *udp, char *pdata, unsigned short l
 	}
 	
 req_ret:
-	//释放请求到的资源
-	if(handle_ret == 1 && m_resp_cb)
-		m_resp_cb(pdata, len);
-
 	coap_free(p);
 	return ret;
 }

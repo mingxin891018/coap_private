@@ -46,8 +46,6 @@ static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt
 
 	coap_make_response(scratch, outpkt, payload, strlen(payload), inpkt->hdr.id[0], inpkt->hdr.id[1], &inpkt->tok, COAP_RSPCODE_CONTENT, COAP_CONTENTTYPE_TEXT_PLAIN);
 	INFO("make msg \"/.well-known/core\"\n");
-
-	return 1;
 }
 
 
