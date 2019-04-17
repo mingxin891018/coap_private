@@ -27,6 +27,7 @@
 
 #define MAX_RESOURCE_NUM 10
 
+//资源响应函数，调用成功后返回1,失败返回负数
 static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt, coap_packet_t *outpkt, uint8_t id_hi, uint8_t id_lo);
 
 const static coap_endpoint_path_t elems_path[MAX_RESOURCE_NUM] = {
@@ -45,6 +46,8 @@ static int well_known_core(coap_rw_buffer_t *scratch, const coap_packet_t *inpkt
 
 	coap_make_response(scratch, outpkt, payload, strlen(payload), inpkt->hdr.id[0], inpkt->hdr.id[1], &inpkt->tok, COAP_RSPCODE_CONTENT, COAP_CONTENTTYPE_TEXT_PLAIN);
 	INFO("make msg \"/.well-known/core\"\n");
+
+	return 1;
 }
 
 

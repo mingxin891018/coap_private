@@ -63,6 +63,8 @@ typedef struct coap_result_ {
 	uint8_t code;
 } coap_result_t;
 
+typedef int (*resp_cb_t)(char *pdata, unsigned short len);
+
 /*********************************************************************************************
 function	创建一个ESP8266 UDP 套接字
 param	p			ESP8266 套接字结构体指针
@@ -89,6 +91,16 @@ param pl	 	request请求携带的msg数据长度
 return  成功返回请求到的结果,失败返回NULL
 *********************************************************************************************/
 coap_result_t *sw_coap_get_request(const char *url, coap_method_t method, coap_msgtype_t type, const char *payload, size_t pl);
+
+
+/*********************************************************************************************
+functio			作为服务器时，用于发送请求到的资源后资源的释放
+
+回调函数typedef int (*resp_cb_t)(char *pdata, unsigned short len)参数为请求此资源的报文
+
+return 设置成功返回0，失败返回负数
+*********************************************************************************************/
+int sw_set_resp_cb(resp_cb_t resp_cb);
 
 /*********************************************************************************************
 function	释放掉请求到的数据
