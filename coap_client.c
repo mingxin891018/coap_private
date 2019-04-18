@@ -277,9 +277,9 @@ static bool coap_recv_request(struct espconn *udp, char *pdata, unsigned short l
 {
 	int handle_ret = 0;
 	bool ret = true;
-	static char buf[2] = {0};
+	char buf[2] = {0};
 	coap_packet_t inpkt = {0}, outpkt = {0};
-	static coap_rw_buffer_t send_data = {0}, content_type = {0};
+	coap_rw_buffer_t send_data = {0}, content_type = {0};
 
 	//解析收到的CoAP报文
 	if(0 != coap_parse(&inpkt, (const uint8_t *)pdata, len)){
