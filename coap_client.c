@@ -317,6 +317,7 @@ static bool coap_recv_request(struct espconn *udp, char *pdata, unsigned short l
 	}
 
 	//发送制作好的resp data
+	INFO("response CoAP package:\n");
 	coap_dumpPacket(&outpkt);
 	coap_build(send_data.p, &send_data.len, &outpkt);
 	if(0 != coap_sendto(udp, &send_data, 1)){
@@ -355,6 +356,7 @@ void udp_recv_cb(void *arg, char *pdata, unsigned short len)
 		ERROR("parse coap package error!\n");
 		return ;
 	}
+	INFO("udp recv CoAP packet:\n");
 	coap_dumpPacket(&pkt);
 
 	if((pkt.hdr.t == COAP_TYPE_ACK) || (pkt.hdr.t == COAP_TYPE_RESET)){
@@ -555,12 +557,13 @@ static bool coap_client2packet(coap_client_t *client, const char *tok, int tok_l
 	//msg
 	pkt->payload.p = p;
 	pkt->payload.len = len;
+	INFO("request CoAP package:\n");
 	coap_dumpPacket(pkt);
 
 	return true;
 }
 
-static int coap_client_create(uint32_t ip, uint16_t port, param_list_t *list, coap_method_t method, coap_msgtype_t type, const char *tok, int tok_len, const char *pdata, int len)
+static int coap_client_create(uint32_t ip, uint16_t port, param_list_t *list, coap_method_t method, coap_msgtype_t type, const char *tok, int tok_len, const char *pdata, size_t len)
 {
 	int i = 0, msg_len = 0, ret = -1;
 	coap_client_t *p = NULL;
