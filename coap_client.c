@@ -889,12 +889,12 @@ static int32_t find_ip(const char *url)
 static int find_port(const char *url)
 {
 	char str[8] = {0};
-	char *p = strstr(url, ":");
-	char *q = strstr(url, "/");
+	char *p = strstr(url + 7, ":");
+	char *q = strstr(url + 7, "/");
 
 	memset(str, 0, sizeof(str));
 	if(p != NULL && q != NULL && ((q - p) > 0)){
-		memcpy(str, p, q - p);
+		memcpy(str, p + 1, q - p - 1);
 		INFO("port_str=%s\n", str);
 		return atoi(str);
 	}
